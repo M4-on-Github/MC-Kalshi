@@ -4,7 +4,7 @@
   "private": true,
   "description": "Play-money prediction market for Maryville College",
   "engines": {
-    "node": ">=24.22.1 <25"
+    "node": "24.x"
   },
   "workspaces": [
     "apps/*",

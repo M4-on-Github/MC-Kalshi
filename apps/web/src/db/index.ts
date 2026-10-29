@@ -6,7 +6,7 @@ import * as schema from "./schema";
 // Server only: never import this module from a client component.
 // Supabase's transaction pooler needs `prepare: false`; one connection per serverless instance.
 function createClient(url: string) {
-  const client = postgres(url, { max: 1, prepare: false });
+  const client = postgres(url, { max: 1, prepare: false, idle_timeout: 20, connect_timeout: 10 });
   return drizzle(client, { schema });
 }
 
