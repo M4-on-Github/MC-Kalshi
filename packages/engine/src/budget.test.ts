@@ -55,10 +55,10 @@ describe("quotePoints: validation", () => {
     expect(codeOf(() => quotePoints({ qYes: 0, qNo: 0, b: 7 }, "YES", 10))).toBe("INVALID_STATE");
   });
 
-  it("refuses to invert a budget on a side whose price has saturated to zero", () => {
-    expect(codeOf(() => quotePoints({ qYes: -1e6, qNo: 1e6, b: B_MIN }, "YES", 10))).toBe(
-      "INVALID_STATE",
-    );
+  it("still inverts a budget on a side whose price has underflowed to zero", () => {
+    const quote = quotePoints({ qYes: -1e6, qNo: 1e6, b: B_MIN }, "YES", 10);
+    expect(quote.contracts).toBeGreaterThan(0);
+    expect(quote.costPoints).toBeLessThanOrEqual(10);
   });
 });
 

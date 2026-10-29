@@ -9,7 +9,7 @@ describe("ceilPoints (what a buyer pays)", () => {
     expect(ceilPoints(500)).toBe(500);
   });
 
-  it("ignores floating-point noise below a micro-point", () => {
+  it("ignores floating-point noise within one part in 10¹²", () => {
     expect(ceilPoints(500.0000000001)).toBe(500);
     expect(ceilPoints(500.000001)).toBe(501);
   });
@@ -27,7 +27,7 @@ describe("floorPoints (what a seller receives)", () => {
     expect(floorPoints(500)).toBe(500);
   });
 
-  it("ignores floating-point noise below a micro-point", () => {
+  it("ignores floating-point noise within one part in 10¹²", () => {
     expect(floorPoints(499.9999999999)).toBe(500);
     expect(floorPoints(499.999999)).toBe(499);
   });

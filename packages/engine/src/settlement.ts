@@ -1,13 +1,11 @@
 import { CONTRACT_PAYOUT_POINTS } from "./constants";
-import { B_MAX, B_MIN, EngineError } from "./errors";
+import { assertLiquidity, EngineError } from "./errors";
 import { ceilPoints, floorPoints } from "./rounding";
 import type { Outcome, PositionLike } from "./types";
 
 /** Worst case the pool can lose on one market: 100·b·ln 2, rounded up (architecture §5). */
 export function maxPoolLoss(b: number): number {
-  if (!Number.isFinite(b) || b < B_MIN || b > B_MAX) {
-    throw new EngineError("INVALID_STATE", `b must be within ${B_MIN}..${B_MAX}, got ${b}`);
-  }
+  assertLiquidity(b);
   return ceilPoints(CONTRACT_PAYOUT_POINTS * b * Math.LN2);
 }
 
