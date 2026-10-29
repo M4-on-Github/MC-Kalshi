@@ -1,6 +1,6 @@
 # M0 — Scaffold
 
-Status: in-progress · Milestone: M0 · Research: none · ADRs: 0003 (stack), 0004 (development model), 0005 (REA scope)
+Status: in-progress (awaiting merge) · Milestone: M0 · Research: none · ADRs: 0003 (stack), 0004 (development model), 0005 (REA scope)
 
 ## Problem
 
@@ -38,15 +38,15 @@ Out:
 
 ## Acceptance criteria
 
-- [ ] Given a fresh clone on Node 24.22.1, when `npm ci && npm run typecheck && npm run lint && npm test && npm run build` run, then every command exits 0.
-- [ ] Given `npm run dev`, when `GET /` is opened, then a page titled "MC-Kalshi" shows the product name and a one-line play-money tagline containing none of the words "bet", "$", or "cash out".
-- [ ] Given `DATABASE_URL` is unset, when `GET /api/health` is requested, then the response is `200 {"ok":true,"db":"unconfigured","commit":"<sha or dev>"}`.
+- [x] Given a fresh clone on Node 24.22.1, when `npm ci && npm run typecheck && npm run lint && npm test && npm run build` run, then every command exits 0.
+- [x] Given `npm run dev`, when `GET /` is opened, then a page titled "MC-Kalshi" shows the product name and a one-line play-money tagline containing none of the words "bet", "$", or "cash out".
+- [x] Given `DATABASE_URL` is unset, when `GET /api/health` is requested, then the response is `200 {"ok":true,"db":"unconfigured","commit":"<sha or dev>"}`.
 - [ ] Given `DATABASE_URL` points at the Supabase `dev` project, when `GET /api/health` is requested, then `db` is `"ok"` and the response time is under 2 s.
-- [ ] Given `DATABASE_URL` is wrong, when `GET /api/health` is requested, then the response is `503` with `db: "error"` and the body contains no part of the URL or the error message.
-- [ ] Given `packages/engine`, when `npm test -w packages/engine` runs, then the unit test and a fast-check property (≥ 100 runs) for `clampProbability` pass.
-- [ ] Given a push to `origin/main` or a pull request, when the `ci` workflow runs on Node 24, then lint, typecheck, test, and build all pass.
+- [x] Given `DATABASE_URL` is wrong, when `GET /api/health` is requested, then the response is `503` with `db: "error"` and the body contains no part of the URL or the error message.
+- [x] Given `packages/engine`, when `npm test -w packages/engine` runs, then the unit test and a fast-check property (≥ 100 runs) for `clampProbability` pass.
+- [x] Given a push to `origin/main` or a pull request, when the `ci` workflow runs on Node 24, then lint, typecheck, test, and build all pass.
 - [ ] Given Vercel Root Directory `apps/web` and the fork's `main` at the merged commit, when Vercel deploys, then the production URL serves `/` and `/api/health` returns `db: "unconfigured"` until the human adds env vars.
-- [ ] Given `.env.example`, when compared with `grep -rn "process.env" apps packages`, then every variable the code reads has a line.
+- [x] Given `.env.example`, when compared with `grep -rn "process.env" apps packages`, then every variable the code reads has a line.
 
 ## Tech stack (versions as of 2026-10-28; recorded exactly in `package-lock.json`)
 
@@ -167,15 +167,36 @@ Dependency graph: root workspace → engine package → web app → health route
 8. **Docs** (S, 3 files: `README.md`, `docs/sops/SOP-07-environment-and-secrets.md`, this spec) — Acceptance: README "Getting started" lists the real commands; SOP-07 state row for Vercel says Root Directory is set; spec DoD ticked except the human items. Verify by: read-through.
 9. **Ship** — `/agent-skills:ship`; push the branch to `origin`; the human squash-merges to `main` and pushes `main` to `deploy`, then checks the production URL (DoD "preview checked by a human").
 
+## Review (SOP-02 step 6)
+
+Five-axis review of `main...feat/m0-scaffold` on 2026-10-29. Verdict: approve after the fixes below (commit `e49f37d`).
+
+| Severity | Finding | Action |
+|---|---|---|
+| Important | `engines.node` was `>=24.22.1 <25` with `engine-strict` on; Vercel picks its own 24.x patch, so `npm ci` could fail there on a patch mismatch | Changed to `24.x`; the exact pin stays in `.nvmrc` for local and CI |
+| Important | `postgres()` client had no `idle_timeout`/`connect_timeout`; a frozen serverless instance could hold a pooler slot and a dead network could hang past the health timeout | Added `idle_timeout: 20`, `connect_timeout: 10` |
+| Nit | Engine test imported `./index.js` while the web test imported `./health` | Dropped the extension (bundler resolution) |
+| Consider | `actions/checkout@v5` and `actions/setup-node@v5` are pinned by major tag, not SHA | Deferred to M5 hardening (`/security-review`) |
+| FYI | `/api/health` is public on production and runs `select 1` per request (one connection, 2 s timeout). Fine for M0; rate limits arrive in M5 | None |
+| FYI | `getDb()` returns `undefined` without `DATABASE_URL`; M2 adds a `requireDb()` for code paths that cannot run without a database | None |
+
+Correctness: matches the spec; error and timeout paths tested; the health body is built from fixed fields so no driver text can leak. Readability: route handlers are thin; names match the spec. Architecture: engine has zero runtime deps; db access is server-only by convention (no client components exist yet; a `server-only` guard is an M2 ask-first dependency). Security: no secrets in code; `.env.example` matches `process.env` reads; Vercel Authentication protects previews. Performance: nothing unbounded.
+
+Bug-hunt pass (`/code-review medium`): _recorded below when it completes._
+
 ## Definition of Done
 
 - [ ] Acceptance criteria met and demonstrated (test or screenshot)
-- [ ] Unit tests for logic; Playwright for any user-visible flow that moves points (none in M0)
-- [ ] `npm run typecheck && npm run lint && npm test` green locally and in CI
-- [ ] No secrets in code; new env vars documented in `.env.example`
-- [ ] Docs or ADR updated when behavior or a decision changed
+- [x] Unit tests for logic; Playwright for any user-visible flow that moves points (none in M0)
+- [x] `npm run typecheck && npm run lint && npm test` green locally and in CI
+- [x] No secrets in code; new env vars documented in `.env.example`
+- [x] Docs or ADR updated when behavior or a decision changed
 - [ ] Preview deploy checked by a human
 
 ## Next
-
-_Updated at the end of each session._
+Built, reviewed, and green on CI (`feat/m0-scaffold`, pushed to `origin`). Remaining for the human:
+1. Squash-merge `feat/m0-scaffold` into `main` on GitHub, then push `main` to the fork (`git push deploy main` after adding `M4-on-Github` as a collaborator on the fork, or push from the alt account).
+2. Watch the Vercel production build (Root Directory `apps/web` is set); open `/` and `/api/health` (expect `db: "unconfigured"`). That ticks the two human DoD items.
+3. Optional now, required before M2: put the Supabase `dev` `DATABASE_URL` into Vercel (Preview and Production) and `apps/web/.env.local`, then confirm `/api/health` reports `db: "ok"`.
+4. Decide the public product name before any user sees the page (working name carries Kalshi's trademark; hard constraint 5).
+Then M1: LMSR engine spec (`docs/specs/m1-engine.md`).
