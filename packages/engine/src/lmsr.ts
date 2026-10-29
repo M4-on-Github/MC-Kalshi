@@ -1,6 +1,6 @@
 import { CONTRACT_PAYOUT_POINTS, PRICE_MAX, PRICE_MIN } from "./constants";
-import { assertContracts, assertState, EngineError } from "./errors";
-import { ceilPoints, floorPoints, roundContracts } from "./rounding";
+import { assertContracts, assertPoints, assertState, EngineError } from "./errors";
+import { ceilPoints, floorContracts, floorPoints, roundContracts } from "./rounding";
 import type { MarketState, Quote, Side } from "./types";
 
 /**
@@ -116,4 +116,38 @@ export function quoteContracts(state: MarketState, side: Side, contracts: number
     payoutIfWin: delta > 0 ? floorPoints(delta * CONTRACT_PAYOUT_POINTS) : 0,
     stateAfter,
   };
+}
+
+/**
+ * Buy with a points budget: the largest six-decimal amount of contracts whose rounded cost does
+ * not exceed `points`. The closed form from architecture §5, rewritten for precision:
+ *   Δ = b · log1p( expm1(c / (100·b)) / p_side )
+ * Flooring Δ to six decimals already keeps the cost at or under the budget; the loop only
+ * exists for floating-point noise and is bounded (the property test asserts it never iterates).
+ */
+export function quotePoints(state: MarketState, side: Side, points: number): Quote {
+  assertState(state);
+  assertPoints(points);
+  const { ey, en } = scaled(state);
+  const pSide = (side === "YES" ? ey : en) / (ey + en);
+  if (pSide === 0) {
+    throw new EngineError(
+      "INVALID_STATE",
+      `the price of ${side} has saturated to zero; a budget cannot be inverted`,
+    );
+  }
+  const exact =
+    state.b * Math.log1p(Math.expm1(points / (CONTRACT_PAYOUT_POINTS * state.b)) / pSide);
+  let delta = floorContracts(exact);
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (delta <= 0) {
+      throw new EngineError("INVALID_POINTS", `${points} points buy less than one micro-contract`);
+    }
+    const quote = quoteContracts(state, side, delta);
+    if (quote.costPoints <= points) {
+      return quote;
+    }
+    delta = roundContracts(delta - 0.000001);
+  }
+  throw new EngineError("INVALID_POINTS", `budget inversion did not converge for ${points} points`);
 }
