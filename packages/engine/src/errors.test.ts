@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { assertContracts, assertPoints, assertState, B_MAX, B_MIN, EngineError } from "./errors";
+import {
+  assertContracts,
+  assertFiniteContracts,
+  assertOutcome,
+  assertPoints,
+  assertSide,
+  assertState,
+  B_MAX,
+  B_MIN,
+  EngineError,
+  MAX_CONTRACTS,
+  MAX_POINTS,
+} from "./errors";
 
 function codeOf(fn: () => void): string | undefined {
   try {
@@ -33,8 +45,22 @@ describe("assertState", () => {
     ["b below range", { qYes: 0, qNo: 0, b: B_MIN - 1 }],
     ["b above range", { qYes: 0, qNo: 0, b: B_MAX + 1 }],
     ["NaN b", { qYes: 0, qNo: 0, b: Number.NaN }],
+    ["qYes beyond MAX_CONTRACTS", { qYes: MAX_CONTRACTS + 1, qNo: 0, b: 100 }],
+    ["qNo beyond -MAX_CONTRACTS", { qYes: 0, qNo: -MAX_CONTRACTS - 1, b: 100 }],
+    ["qYes off the six-decimal grid", { qYes: 0.0000001, qNo: 0, b: 100 }],
+    ["qNo off the six-decimal grid", { qYes: 0, qNo: 1.2345678, b: 100 }],
+    ["string qYes", { qYes: "1", qNo: 0, b: 100 }],
+    ["missing b", { qYes: 0, qNo: 0 }],
+    ["null", null],
+    ["undefined", undefined],
+    ["a number", 42],
   ])("rejects %s with INVALID_STATE", (_label, state) => {
-    expect(codeOf(() => assertState(state))).toBe("INVALID_STATE");
+    expect(codeOf(() => assertState(state as never))).toBe("INVALID_STATE");
+  });
+
+  it("accepts q exactly at ±MAX_CONTRACTS", () => {
+    expect(MAX_CONTRACTS).toBe(1e9);
+    expect(() => assertState({ qYes: MAX_CONTRACTS, qNo: -MAX_CONTRACTS, b: 100 })).not.toThrow();
   });
 });
 
@@ -51,6 +77,15 @@ describe("assertContracts", () => {
       expect(codeOf(() => assertContracts(value))).toBe("INVALID_CONTRACTS");
     },
   );
+
+  it("caps the size of a trade at MAX_CONTRACTS either way", () => {
+    expect(() => assertContracts(MAX_CONTRACTS)).not.toThrow();
+    expect(() => assertContracts(-MAX_CONTRACTS)).not.toThrow();
+    expect(codeOf(() => assertContracts(MAX_CONTRACTS + 1))).toBe("INVALID_CONTRACTS");
+    expect(codeOf(() => assertContracts(-MAX_CONTRACTS - 1))).toBe("INVALID_CONTRACTS");
+    expect(codeOf(() => assertFiniteContracts(MAX_CONTRACTS + 1))).toBe("INVALID_CONTRACTS");
+    expect(() => assertFiniteContracts(0)).not.toThrow();
+  });
 });
 
 describe("assertPoints", () => {
@@ -63,6 +98,29 @@ describe("assertPoints", () => {
     "rejects %s with INVALID_POINTS",
     (value) => {
       expect(codeOf(() => assertPoints(value))).toBe("INVALID_POINTS");
+    },
+  );
+
+  it("caps a budget at MAX_POINTS", () => {
+    expect(MAX_POINTS).toBe(1e12);
+    expect(() => assertPoints(MAX_POINTS)).not.toThrow();
+    expect(codeOf(() => assertPoints(MAX_POINTS + 1))).toBe("INVALID_POINTS");
+  });
+});
+
+describe("assertSide and assertOutcome", () => {
+  it("accept exactly YES and NO", () => {
+    for (const value of ["YES", "NO"]) {
+      expect(() => assertSide(value)).not.toThrow();
+      expect(() => assertOutcome(value)).not.toThrow();
+    }
+  });
+
+  it.each(["yes", "no", "VOID", "", " YES", undefined, null, 1])(
+    "reject %s with INVALID_SIDE",
+    (value) => {
+      expect(codeOf(() => assertSide(value))).toBe("INVALID_SIDE");
+      expect(codeOf(() => assertOutcome(value))).toBe("INVALID_SIDE");
     },
   );
 });

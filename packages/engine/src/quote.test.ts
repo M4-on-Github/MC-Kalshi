@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EngineError } from "./errors";
+import { EngineError, MAX_CONTRACTS } from "./errors";
 import { quoteContracts } from "./lmsr";
 import type { MarketState } from "./types";
 
@@ -32,8 +32,16 @@ describe("quoteContracts: buying", () => {
     expect(quote.payoutIfWin).toBe(976);
   });
 
-  it("clamps the average price into 1..99 for pathological sizes", () => {
-    expect(quoteContracts(fresh, "YES", 0.000001).avgPrice).toBe(99);
+  it("prices the average from the exact cost, so the one-point minimum does not distort it", () => {
+    const micro = quoteContracts(fresh, "YES", 0.000001);
+    expect(micro.costPoints).toBe(1);
+    expect(micro.avgPrice).toBe(50);
+    const hundredth = quoteContracts(fresh, "YES", 0.01);
+    expect(hundredth.costPoints).toBe(1);
+    expect(hundredth.avgPrice).toBe(50);
+  });
+
+  it("clamps the average price into 1..99", () => {
     expect(quoteContracts({ qYes: -1e6, qNo: 1e6, b: 50 }, "YES", 1).avgPrice).toBe(1);
   });
 });
@@ -60,5 +68,27 @@ describe("quoteContracts: validation", () => {
 
   it("rejects an invalid state before doing any math", () => {
     expect(() => quoteContracts({ qYes: 0, qNo: 0, b: 1 }, "YES", 1)).toThrow(EngineError);
+    expect(() => quoteContracts(null as never, "YES", 1)).toThrow(EngineError);
+    expect(() => quoteContracts({ qYes: 0.1234567, qNo: 0, b: 100 }, "YES", 1)).toThrow(
+      EngineError,
+    );
+  });
+
+  it("rejects a side that is not exactly YES or NO", () => {
+    expect(() => quoteContracts(fresh, "yes" as never, 1)).toThrow(
+      expect.objectContaining({ code: "INVALID_SIDE" }),
+    );
+  });
+
+  it("rejects trades beyond MAX_CONTRACTS and trades that would push q beyond it", () => {
+    const fresh50: MarketState = { qYes: 0, qNo: 0, b: 50 };
+    expect(() => quoteContracts(fresh50, "YES", MAX_CONTRACTS + 1)).toThrow(
+      expect.objectContaining({ code: "INVALID_CONTRACTS" }),
+    );
+    const nearCap: MarketState = { qYes: MAX_CONTRACTS - 1, qNo: 0, b: 50 };
+    expect(() => quoteContracts(nearCap, "YES", 2)).toThrow(
+      expect.objectContaining({ code: "INVALID_CONTRACTS" }),
+    );
+    expect(quoteContracts(nearCap, "YES", 1).stateAfter.qYes).toBe(MAX_CONTRACTS);
   });
 });

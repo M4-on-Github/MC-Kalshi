@@ -130,8 +130,11 @@ Implementation rules:
   exactly 0 below about −745; quoting and budget inversion still work there (log domain, above).
 - **Rounding always favors the pool**: a buy's cost rounds **up** to a whole point; a sell's
   proceeds round **down**; payouts round **down**. Contracts are kept to 6 dp. Point values
-  carry a relative tolerance of 1e-12 before rounding so floating-point noise cannot move a
+  carry a tolerance of `min(1e-6, max(1e-12, 1e-12·|x|))` before rounding so floating-point noise cannot move a
   whole-point boundary; a buy never costs less than one point.
+- Bounds: `|q_y|`, `|q_n|` and a trade's `|Δ|` are at most 1e9 contracts (`MAX_CONTRACTS`), budgets and
+  cost bases at most 1e12 points (`MAX_POINTS`), so every integer result stays a safe integer; `q`
+  must sit on the six-decimal grid. A budget that would buy more than 1e9 contracts is rejected.
 - One function produces both the quote shown in the ticket and the fill executed server-side:
   `{ contracts, costPoints, avgPrice, probBefore, probAfter, payoutIfWin }`. The server
   rejects a fill whose price moved beyond the user's slippage tolerance (default 2 points).

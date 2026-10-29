@@ -1,5 +1,5 @@
 import { CONTRACT_PAYOUT_POINTS } from "./constants";
-import { assertLiquidity, EngineError } from "./errors";
+import { assertLiquidity, assertOutcome, EngineError, MAX_POINTS } from "./errors";
 import { ceilPoints, floorPoints } from "./rounding";
 import type { Outcome, PositionLike } from "./types";
 
@@ -26,6 +26,7 @@ function assertHoldings(position: PositionLike): void {
 
 /** Whole points a position receives when the market resolves to `outcome`; rounds down. */
 export function payout(position: PositionLike, outcome: Outcome): number {
+  assertOutcome(outcome);
   assertHoldings(position);
   const winning = outcome === "YES" ? position.contractsYes : position.contractsNo;
   return floorPoints(winning * CONTRACT_PAYOUT_POINTS);
@@ -33,10 +34,11 @@ export function payout(position: PositionLike, outcome: Outcome): number {
 
 /** Points returned on a void: exactly the user's net cost basis, which may be negative. */
 export function voidRefund(position: PositionLike): number {
-  if (!Number.isInteger(position.costBasisPoints)) {
+  const basis = position.costBasisPoints;
+  if (!Number.isInteger(basis) || Math.abs(basis) > MAX_POINTS) {
     throw new EngineError(
       "INVALID_POINTS",
-      `cost basis must be an integer number of points, got ${position.costBasisPoints}`,
+      `cost basis must be an integer number of points within ±${MAX_POINTS}, got ${basis}`,
     );
   }
   return position.costBasisPoints;
