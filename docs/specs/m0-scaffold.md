@@ -185,6 +185,18 @@ Correctness: matches the spec; error and timeout paths tested; the health body i
 
 Bug-hunt pass (`/code-review medium`), nine findings, all addressed in the follow-up commit: `connect_timeout` lowered to 5 s so a stuck connect cannot hold the single connection past the health budget; CI now also runs on `pull_request` to `main`; the DB client is cached on `globalThis` so `next dev` hot reloads do not leak pooled connections; `drizzle.config.ts` warns clearly when `DATABASE_URL` is unset; the spec index row was restored (an earlier `git checkout` of Markdown files had reverted it); root Vitest config renamed to `.mts` to silence Vite's CommonJS warning; `apps/web/vitest.config.mts` added with the `@` alias; spec structure text corrected (no `postcss.config.mjs`, `.env.example` lives in `apps/web`, closed interval); the route now asks `getDb()` instead of re-reading `DATABASE_URL`.
 
+## Ship decision (SOP-02 step 7, `/agent-skills:ship`): GO, pending two human actions
+
+Three specialist passes ran on 2026-10-29 against the branch; their findings were folded into commit `4fec650`.
+
+- **code-reviewer**: Approve. No Critical or Important findings. Applied: `ssl: "require"` on the DB client, `poweredByHeader: false`, CI `permissions: contents: read`, `pingDatabase(db)` so the route does one lookup and the unconfigured throw is gone, comment wording on `connect_timeout`, identity property for `clampProbability`, spec exemption for React component return types. Not applied: collapsing CI to `push: branches: [main]` (same-repo PRs run the gate twice; accepted so a pushed branch gets CI before a PR exists); dark-mode variants on the hello page (replaced in M2).
+- **security-auditor**: GO, 0 Critical/High, 1 Medium (plaintext Postgres session by default). Fixed in code and config: the client forces TLS, `.env.example` asks for `?sslmode=require` for drizzle-kit, and "Enforce SSL on incoming connections" is on in both Supabase projects (each restarted once; no data existed). Deferred with the spec's agreement: SHA-pinned actions plus Dependabot (M5), security `headers()` and `server-only` guard (M2), rate limit on `/api/health` (M5), sanitized server-side logging of health failures (M2). Dev-only esbuild advisory via drizzle-kit: no production exposure.
+- **test-engineer**: nothing blocks merge. Added: default 2 s timeout pinned, timer cleanup, late rejection after timeout, empty commit treated as unset, `-Infinity` rejected, hello-page copy guard for hard constraint 1 (`page.test.ts`). Engine identity/monotonic properties and `getDb`/route tests wait for M1/M2.
+
+Blockers: none in the diff. Conditions (human): both GitHub repos switched to private before merge (SOP-07), and the TLS settings above are in place before `DATABASE_URL` is entered into Vercel (done).
+
+Rollback plan: the only production artifact is a static page plus `/api/health`. Trigger: Vercel build failure after the Root Directory change, or `/` not serving. Procedure: Vercel → Deployments → promote the previous deployment (none exists yet, so instead revert the merge commit on `main` and push to `deploy`); no schema, no data, no env vars to unwind. Recovery time objective: under 10 minutes.
+
 ## Definition of Done
 
 - [ ] Acceptance criteria met and demonstrated (test or screenshot)
@@ -195,9 +207,11 @@ Bug-hunt pass (`/code-review medium`), nine findings, all addressed in the follo
 - [ ] Preview deploy checked by a human
 
 ## Next
-Built, reviewed, and green on CI (`feat/m0-scaffold`, pushed to `origin`). Remaining for the human:
-1. Squash-merge `feat/m0-scaffold` into `main` on GitHub, then push `main` to the fork (`git push deploy main` after adding `M4-on-Github` as a collaborator on the fork, or push from the alt account).
-2. Watch the Vercel production build (Root Directory `apps/web` is set); open `/` and `/api/health` (expect `db: "unconfigured"`). That ticks the two human DoD items.
-3. Optional now, required before M2: put the Supabase `dev` `DATABASE_URL` into Vercel (Preview and Production) and `apps/web/.env.local`, then confirm `/api/health` reports `db: "ok"`.
-4. Decide the public product name before any user sees the page (working name carries Kalshi's trademark; hard constraint 5).
+
+Built, reviewed by three specialist passes, hardened, and green on CI at `4fec650` (`feat/m0-scaffold`, pushed to `origin`). Remaining for the human:
+1. Make both GitHub repos private (SOP-07).
+2. Squash-merge `feat/m0-scaffold` into `main` on GitHub, then push `main` to the fork (`git push deploy main` after adding `M4-on-Github` as a collaborator on the fork, or push from the alt account). Vercel builds from the fork with Root Directory `apps/web`.
+3. Open the production URL: `/` shows the hello page, `/api/health` returns `db: "unconfigured"`. That ticks the two human DoD items; mark this spec `done`.
+4. Before M2: put the Supabase `dev` `DATABASE_URL` (with `?sslmode=require`) into Vercel Preview and Production and into `apps/web/.env.local`; confirm `/api/health` reports `db: "ok"`.
+5. Decide the public product name before any user sees the page (working name carries Kalshi's trademark; hard constraint 5); replace the default favicon at the same time.
 Then M1: LMSR engine spec (`docs/specs/m1-engine.md`).
