@@ -33,6 +33,13 @@ describe("floorPoints (what a seller receives)", () => {
   });
 });
 
+describe("rounding tolerance at large magnitudes", () => {
+  it("is capped so a real fraction of a point is never swallowed", () => {
+    expect(ceilPoints(1e12 + 0.4)).toBe(1e12 + 1);
+    expect(floorPoints(1e12 + 0.6)).toBe(1e12);
+  });
+});
+
 describe("contract rounding", () => {
   it("roundContracts keeps six decimals, half away from zero", () => {
     expect(roundContracts(1.23456789)).toBe(1.234568);

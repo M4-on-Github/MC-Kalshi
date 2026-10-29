@@ -1,7 +1,8 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { B_MAX, B_MIN, EngineError } from "./errors";
+import { B_MAX, B_MIN, EngineError, MAX_POINTS } from "./errors";
 import { quoteContracts, quotePoints } from "./lmsr";
+import { roundContracts } from "./rounding";
 import type { MarketState, Side } from "./types";
 
 const fresh: MarketState = { qYes: 0, qNo: 0, b: 100 };
@@ -53,6 +54,22 @@ describe("quotePoints: validation", () => {
 
   it("rejects an invalid state", () => {
     expect(codeOf(() => quotePoints({ qYes: 0, qNo: 0, b: 7 }, "YES", 10))).toBe("INVALID_STATE");
+    expect(codeOf(() => quotePoints(null as never, "YES", 10))).toBe("INVALID_STATE");
+  });
+
+  it("rejects a side that is not exactly YES or NO", () => {
+    expect(codeOf(() => quotePoints(fresh, "no" as never, 10))).toBe("INVALID_SIDE");
+  });
+
+  it("rejects budgets above MAX_POINTS, and budgets that would buy beyond MAX_CONTRACTS", () => {
+    const fresh50: MarketState = { qYes: 0, qNo: 0, b: B_MIN };
+    expect(codeOf(() => quotePoints(fresh50, "YES", MAX_POINTS + 1))).toBe("INVALID_POINTS");
+    // 1e12 points pass the budget check but would buy about 1e10 contracts.
+    expect(codeOf(() => quotePoints(fresh50, "YES", MAX_POINTS))).toBe("INVALID_POINTS");
+    const large = quotePoints(fresh50, "YES", 1e10);
+    expect(large.costPoints).toBeLessThanOrEqual(1e10);
+    expect(large.costPoints).toBeGreaterThan(1e10 - 1);
+    expect(Number.isSafeInteger(large.costPoints)).toBe(true);
   });
 
   it("still inverts a budget on a side whose price has underflowed to zero", () => {
@@ -64,7 +81,7 @@ describe("quotePoints: validation", () => {
 
 describe("invariant 5: budget inversion never overspends and lands within a point", () => {
   // Keep the side's price representable (> e^-400) so the inversion is defined.
-  const q = fc.double({ min: -1e4, max: 1e4, noNaN: true });
+  const q = fc.double({ min: -1e4, max: 1e4, noNaN: true }).map((x) => roundContracts(x));
   const b = fc.double({ min: B_MIN, max: B_MAX, noNaN: true });
   const stateArb: fc.Arbitrary<MarketState> = fc.record({ qYes: q, qNo: q, b });
   const sideArb: fc.Arbitrary<Side> = fc.constantFrom("YES", "NO");

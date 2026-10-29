@@ -37,6 +37,13 @@ describe("payout", () => {
     expect(payout(position, "NO")).toBe(225);
   });
 
+  it("rejects an outcome that is not exactly YES or NO", () => {
+    const position = { contractsYes: 1, contractsNo: 0, costBasisPoints: 50 };
+    for (const outcome of ["VOID", "yes", undefined]) {
+      expect(codeOf(() => payout(position, outcome as never))).toBe("INVALID_SIDE");
+    }
+  });
+
   it("rejects negative or non-finite holdings", () => {
     expect(
       codeOf(() => payout({ contractsYes: -1, contractsNo: 0, costBasisPoints: 0 }, "YES")),
@@ -61,5 +68,14 @@ describe("voidRefund", () => {
     expect(
       codeOf(() => voidRefund({ contractsYes: 0, contractsNo: 0, costBasisPoints: Number.NaN })),
     ).toBe("INVALID_POINTS");
+  });
+
+  it("caps the cost basis at ±MAX_POINTS", () => {
+    expect(voidRefund({ contractsYes: 0, contractsNo: 0, costBasisPoints: -1e12 })).toBe(-1e12);
+    for (const costBasisPoints of [1e12 + 1, -1e12 - 1]) {
+      expect(codeOf(() => voidRefund({ contractsYes: 0, contractsNo: 0, costBasisPoints }))).toBe(
+        "INVALID_POINTS",
+      );
+    }
   });
 });

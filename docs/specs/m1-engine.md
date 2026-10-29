@@ -8,7 +8,9 @@ Every later slice (order ticket, trade action, resolution, void, leaderboard) ne
 `packages/engine` exposes a small, pure API that turns a market's AMM state and a trade intent into a quote (contracts, cost, prices, payout, new state), inverts a points budget into contracts, computes settlement payouts and void refunds, and reports the pool's maximum liability. The six invariants in architecture §5 hold under property testing, and line coverage is at least 95 %.
 
 ## Assumptions (made without a reviewer; correct them and the spec changes first)
-1. Points are integers; contracts are numbers kept to 6 decimal places; probabilities are numbers in (0, 1); displayed prices are integers 1–99. Rounding always favors the pool: buy cost rounds up and is never below 1 point; sell proceeds round down; payouts round down. Contracts keep six decimals, and `q` is snapped back to that grid after every trade. Point values carry a relative tolerance of 1e-12 before rounding, so floating-point noise cannot move a whole-point boundary; that is the only way a rounding rule can favor the user, and by at most 1e-12 of the amount.
+1. Points are integers; contracts are numbers kept to 6 decimal places; probabilities are numbers in (0, 1); displayed prices are integers 1–99. Rounding always favors the pool: buy cost rounds up and is never below 1 point; sell proceeds round down; payouts round down. Contracts keep six decimals, and `q` is snapped back to that grid after every trade. Point values carry a tolerance of `min(1e-6, max(1e-12, 1e-12·|x|))` before rounding, so floating-point noise cannot move a whole-point boundary; that is the only way a rounding rule can favor the user, and by at most 1e-6 points.
+7. Inputs are bounded: `|qYes|`, `|qNo|` and `|contracts|` at most `MAX_CONTRACTS` (1e9), budgets and `|costBasisPoints|` at most `MAX_POINTS` (1e12). A state must be an object with finite numeric `qYes`, `qNo`, `b` and `q` on the six-decimal grid, or `INVALID_STATE`. Sides and outcomes must be exactly `"YES"` or `"NO"`, or `INVALID_SIDE`.
+8. `avgPrice` is whole points per contract from the exact (unrounded) cost, clamped to 1..99; the one-point minimum does not change it.
 2. The engine never sees positions or balances except where a function takes one explicitly (`payout`, `voidRefund`). Whether a user may sell what they sell, and whether they can afford a buy, is the server's job in M3.
 3. "Sell YES" is `contracts < 0` on side YES (reduces `q_yes`); "buy NO" is `contracts > 0` on side NO (increases `q_no`). They are different state changes and both are first-class.
 4. One new dev dependency, `@vitest/coverage-v8`, is justified by the milestone's coverage exit criterion.
@@ -44,7 +46,7 @@ export interface Quote {
   readonly side: Side;
   readonly contracts: number;    // signed, 6 dp: + buy, − sell
   readonly costPoints: number;   // signed integer: + the user pays, − the user receives
-  readonly avgPrice: number;     // integer 1..99, cost per contract in points
+  readonly avgPrice: number;     // integer 1..99: whole points per contract from the exact cost (the one-point minimum does not change it)
   readonly probBefore: number;   // p_yes before
   readonly probAfter: number;    // p_yes after
   readonly payoutIfWin: number;  // integer points the position pays if `side` resolves true (0 for sells)
@@ -65,16 +67,18 @@ export function quotePoints(state: MarketState, side: Side, points: number): Quo
 export function maxPoolLoss(b: number): number;                          // integer points, 100·b·ln 2 rounded up
 export function payout(position: PositionLike, outcome: Outcome): number; // integer points, rounded down
 export function voidRefund(position: PositionLike): number;             // = costBasisPoints
-export type EngineErrorCode = "INVALID_STATE" | "INVALID_CONTRACTS" | "INVALID_POINTS";
+export type EngineErrorCode = "INVALID_STATE" | "INVALID_CONTRACTS" | "INVALID_POINTS" | "INVALID_SIDE";
 export class EngineError extends RangeError { readonly code: EngineErrorCode }
 export const B_MIN = 50;   // liquidity bounds, in contracts
 export const B_MAX = 500;
+export const MAX_CONTRACTS = 1e9; // cap on |qYes|, |qNo| and |contracts| per trade
+export const MAX_POINTS = 1e12;   // cap on budgets and |costBasisPoints|
 export const CONTRACT_PAYOUT_POINTS = 100, PRICE_MIN = 1, PRICE_MAX = 99;
 export function clampProbability(p: number): number;
 ```
-This is exactly what `src/index.ts` exports. `fitContractsToBudget` is exported from `lmsr.ts` for tests only and is not re-exported.
+This is exactly what `src/index.ts` exports. `fitContractsToBudget` and `logProbabilities` are exported from `lmsr.ts` for tests only and are not re-exported. `errors.ts` also holds `assertSide(value)` and `assertOutcome(value)`, which accept only the exact strings `"YES"` and `"NO"` and throw `INVALID_SIDE` otherwise (so `"yes"`, `"VOID"` and `undefined` are rejected); `tradeCost`, `quoteContracts` and `quotePoints` call `assertSide` first, and `payout` calls `assertOutcome`.
 
-Errors are thrown as `EngineError` with a `code` so the server can map them to user messages without parsing text. `quotePoints` inverts the budget in the log domain and returns a quote for any representable state, including one where a side's probability has underflowed to 0; it throws `INVALID_POINTS` only if the amount is not a positive integer number of points, buys less than one micro-contract, or cannot be fitted within four micro-contract steps.
+Errors are thrown as `EngineError` with a `code` so the server can map them to user messages without parsing text. `quotePoints` inverts the budget in the log domain and returns a quote for any representable state, including one where a side's probability has underflowed to 0; it throws `INVALID_POINTS` only if the amount is not an integer in 1..`MAX_POINTS`, would buy more than `MAX_CONTRACTS`, buys less than one micro-contract, or cannot be fitted within four micro-contract steps. `quoteContracts` throws `INVALID_CONTRACTS` for a trade larger than `MAX_CONTRACTS` or one that would move `q` beyond `±MAX_CONTRACTS`.
 
 ## Acceptance criteria
 - [ ] Given any finite `MarketState` with `b` in 50..500, when `probabilityYes` runs, then `0 ≤ p ≤ 1`, `p + probabilityYes(swapped sides) = 1` within 1e-12, and strictly `0 < p < 1` while `|qYes − qNo|/b < 36` (invariant 1; beyond that gap `1 − p` is below one ulp of 1 in double precision).
@@ -106,7 +110,7 @@ packages/engine/src/
   lmsr.ts           costFunction, probabilityYes, tradeCost, quoteContracts, quotePoints (+ fitContractsToBudget, tests only)
   rounding.ts       ceilPoints, floorPoints, roundContracts, floorContracts (6 dp)
   settlement.ts     maxPoolLoss, payout, voidRefund
-  errors.ts         EngineError, EngineErrorCode, B_MIN, B_MAX, assert* helpers
+  errors.ts         EngineError, EngineErrorCode, B_MIN, B_MAX, MAX_CONTRACTS, MAX_POINTS, assert* helpers
   constants.ts      CONTRACT_PAYOUT_POINTS, PRICE_MIN, PRICE_MAX
   types.ts          Side, Outcome, MarketState, Quote, PositionLike
   errors.test.ts  rounding.test.ts  lmsr.test.ts  quote.test.ts  budget.test.ts
@@ -155,6 +159,8 @@ None. The quote's fields are what the M3 order ticket displays (see `docs/resear
 Trade-offs recorded:
 - CI runs the engine suite twice (`npm test`, then the coverage run), roughly ten seconds extra per push; accepted so the root `npm test` stays the single local gate.
 - A buy whose exact cost is below one point costs one point.
+- States and trades are capped at 1e9 contracts and budgets at 1e12 points, so every integer result (micro-contracts, points) stays a safe integer.
+- Budgets above roughly 1e11 points are rejected (`INVALID_POINTS`) because they would buy more than the 1e9-contract cap.
 
 ## Tasks (from /agent-skills:plan)
 Dependency graph: errors and rounding → probability and cost → quote by contracts → quote by points → settlement and liability → public surface and coverage gate → adversarial pass and docs. Every task lands its failing test first (TDD is mandatory here); the local gate is `npm run typecheck && npm run lint && npm test`.

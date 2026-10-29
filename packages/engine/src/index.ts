@@ -4,7 +4,7 @@
  */
 export { CONTRACT_PAYOUT_POINTS, PRICE_MAX, PRICE_MIN } from "./constants";
 export type { EngineErrorCode } from "./errors";
-export { B_MAX, B_MIN, EngineError } from "./errors";
+export { B_MAX, B_MIN, EngineError, MAX_CONTRACTS, MAX_POINTS } from "./errors";
 export { costFunction, probabilityYes, quoteContracts, quotePoints, tradeCost } from "./lmsr";
 export { maxPoolLoss, payout, voidRefund } from "./settlement";
 export type { MarketState, Outcome, PositionLike, Quote, Side } from "./types";

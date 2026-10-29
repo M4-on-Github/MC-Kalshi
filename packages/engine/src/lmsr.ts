@@ -3,8 +3,10 @@ import {
   assertContracts,
   assertFiniteContracts,
   assertPoints,
+  assertSide,
   assertState,
   EngineError,
+  MAX_CONTRACTS,
 } from "./errors";
 import { ceilPoints, floorContracts, floorPoints, roundContracts } from "./rounding";
 import type { MarketState, Quote, Side } from "./types";
@@ -37,12 +39,13 @@ interface LogProbs {
   readonly logPNo: number;
 }
 
-function logProbabilities(state: MarketState): LogProbs {
-  const ay = state.qYes / state.b;
-  const an = state.qNo / state.b;
-  const m = Math.max(ay, an);
-  const logSum = m + Math.log(Math.exp(ay - m) + Math.exp(an - m));
-  return { logPYes: ay - logSum, logPNo: an - logSum };
+/**
+ * ln p_yes = −softplus((qN − qY)/b) and ln p_no = −softplus((qY − qN)/b): only the gap enters, so
+ * large but equal |q| never cancel. Exported for tests; not part of the package's public surface.
+ */
+export function logProbabilities(state: MarketState): LogProbs {
+  const gap = (state.qYes - state.qNo) / state.b;
+  return { logPYes: -softplus(-gap), logPNo: -softplus(gap) };
 }
 
 /** ln(e^a + e^b) without overflow. */
@@ -93,6 +96,7 @@ function tradeValue(lp: LogProbs, side: Side, d: number): number {
 
 /** Exact cost of moving `delta` contracts on `side`, in points, unrounded. */
 export function tradeCost(state: MarketState, side: Side, delta: number): number {
+  assertSide(side);
   assertState(state);
   assertFiniteContracts(delta);
   const value = tradeValue(logProbabilities(state), side, delta / state.b);
@@ -116,6 +120,7 @@ function clampPrice(price: number): number {
  * contracts keep six decimals.
  */
 export function quoteContracts(state: MarketState, side: Side, contracts: number): Quote {
+  assertSide(side);
   assertState(state);
   assertContracts(contracts);
   const delta = roundContracts(contracts);
@@ -126,6 +131,12 @@ export function quoteContracts(state: MarketState, side: Side, contracts: number
     );
   }
   const stateAfter = applyContracts(state, side, delta);
+  if (Math.abs(side === "YES" ? stateAfter.qYes : stateAfter.qNo) > MAX_CONTRACTS) {
+    throw new EngineError(
+      "INVALID_CONTRACTS",
+      `trade would move q on ${side} beyond ±${MAX_CONTRACTS} contracts`,
+    );
+  }
   const value = tradeValue(logProbabilities(state), side, delta / state.b);
   const rawCost = CONTRACT_PAYOUT_POINTS * state.b * value;
   let costPoints: number;
@@ -135,7 +146,8 @@ export function quoteContracts(state: MarketState, side: Side, contracts: number
     const proceeds = floorPoints(-rawCost);
     costPoints = proceeds === 0 ? 0 : -proceeds;
   }
-  const avgPrice = clampPrice(Math.round(Math.abs(costPoints) / Math.abs(delta)));
+  // From the exact cost, so the one-point minimum charge does not distort the displayed price.
+  const avgPrice = clampPrice(Math.round(Math.abs(rawCost) / Math.abs(delta)));
   return {
     side,
     contracts: delta,
@@ -152,9 +164,11 @@ export function quoteContracts(state: MarketState, side: Side, contracts: number
  * Buy with a points budget: the largest six-decimal amount of contracts whose rounded cost does
  * not exceed `points`. The closed form from architecture §5 in the log domain:
  *   Δ / b = ln(1 + expm1(c / (100·b)) / p_side) = softplus( ln expm1(c/(100·b)) − ln p_side )
- * which stays finite for any budget and any representable state.
+ * which stays finite for any budget and any representable state; a budget that would buy more
+ * than MAX_CONTRACTS is rejected.
  */
 export function quotePoints(state: MarketState, side: Side, points: number): Quote {
+  assertSide(side);
   assertState(state);
   assertPoints(points);
   const lp = logProbabilities(state);
@@ -162,8 +176,11 @@ export function quotePoints(state: MarketState, side: Side, points: number): Quo
   const x = points / (CONTRACT_PAYOUT_POINTS * state.b);
   const logExpm1 = x > 700 ? x : Math.log(Math.expm1(x));
   const exact = state.b * softplus(logExpm1 - logPSide);
-  if (!Number.isFinite(exact)) {
-    throw new EngineError("INVALID_POINTS", `${points} points cannot be priced on this market`);
+  if (exact > MAX_CONTRACTS) {
+    throw new EngineError(
+      "INVALID_POINTS",
+      `${points} points would buy more than ${MAX_CONTRACTS} contracts`,
+    );
   }
   return fitContractsToBudget(state, side, exact, points);
 }
