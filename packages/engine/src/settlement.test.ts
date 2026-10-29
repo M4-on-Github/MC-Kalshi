@@ -116,3 +116,42 @@ describe("voidRefund", () => {
     }
   });
 });
+
+describe("settlement edge values (cycle 3)", () => {
+  it("a −0 holding pays +0", () => {
+    expect(
+      Object.is(payout({ contractsYes: -0, contractsNo: 0, costBasisPoints: 0 }, "YES"), 0),
+    ).toBe(true);
+  });
+
+  it("rejects null-prototype positions and fields with EngineError", () => {
+    const odd = Object.create(null);
+    expect(codeOf(() => payout(odd as never, "YES"))).toBe("INVALID_CONTRACTS");
+    expect(
+      codeOf(() =>
+        payout({ contractsYes: odd, contractsNo: 0, costBasisPoints: 0 } as never, "YES"),
+      ),
+    ).toBe("INVALID_CONTRACTS");
+    expect(
+      codeOf(() => voidRefund({ contractsYes: 0, contractsNo: 0, costBasisPoints: odd } as never)),
+    ).toBe("INVALID_POINTS");
+    expect(
+      codeOf(() => payout({ contractsYes: 0, contractsNo: 0, costBasisPoints: 0 }, odd as never)),
+    ).toBe("INVALID_SIDE");
+  });
+
+  it("rejects a position whose getter throws with INVALID_STATE", () => {
+    const hostile = {
+      get contractsYes(): number {
+        throw new Error("boom");
+      },
+      contractsNo: 0,
+      costBasisPoints: 0,
+    };
+    expect(codeOf(() => payout(hostile as never, "YES"))).toBe("INVALID_STATE");
+  });
+
+  it("rejects a null-prototype liquidity with INVALID_STATE", () => {
+    expect(codeOf(() => maxPoolLoss(Object.create(null) as never))).toBe("INVALID_STATE");
+  });
+});

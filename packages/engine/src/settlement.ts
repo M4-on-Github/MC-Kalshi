@@ -1,5 +1,6 @@
 import { CONTRACT_PAYOUT_POINTS } from "./constants";
 import { assertLiquidity, assertOutcome, assertPosition } from "./errors";
+import { noNegativeZero } from "./rounding";
 import type { Outcome, PositionLike } from "./types";
 
 const MICRO = 1e6;
@@ -19,7 +20,7 @@ export function maxPoolLoss(b: number): number {
  * large six-decimal amounts (537000000.05 × 100) do not misround. Exported for lmsr.ts.
  */
 export function payoutPoints(contracts: number): number {
-  return Math.floor(Math.round(contracts * MICRO) / MICROS_PER_POINT);
+  return noNegativeZero(Math.floor(Math.round(contracts * MICRO) / MICROS_PER_POINT));
 }
 
 /** Whole points a position receives when the market resolves to `outcome`; rounds down. */

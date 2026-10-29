@@ -5,10 +5,11 @@ import {
   assertPoints,
   assertSide,
   assertState,
+  describe,
   EngineError,
   MAX_CONTRACTS,
 } from "./errors";
-import { ceilPoints, floorPoints, roundContracts } from "./rounding";
+import { ceilPoints, floorPoints, noNegativeZero, roundContracts } from "./rounding";
 import { payoutPoints } from "./settlement";
 import type { MarketState, Quote, Side } from "./types";
 
@@ -99,14 +100,14 @@ export function tradeCost(state: MarketState, side: Side, delta: number): number
   assertState(state);
   assertFiniteContracts(delta);
   const value = tradeValue(logProbabilities(state), side, delta / state.b);
-  return CONTRACT_PAYOUT_POINTS * state.b * value;
+  return noNegativeZero(CONTRACT_PAYOUT_POINTS * state.b * value);
 }
 
 function applyContracts(state: MarketState, side: Side, delta: number): MarketState {
   // Keep q on the six-decimal grid; fifty 0.1-contract buys would otherwise drift to 4.999999999999998.
   return side === "YES"
-    ? { qYes: roundContracts(state.qYes + delta), qNo: state.qNo, b: state.b }
-    : { qYes: state.qYes, qNo: roundContracts(state.qNo + delta), b: state.b };
+    ? { qYes: roundContracts(state.qYes + delta), qNo: noNegativeZero(state.qNo), b: state.b }
+    : { qYes: noNegativeZero(state.qYes), qNo: roundContracts(state.qNo + delta), b: state.b };
 }
 
 function clampPrice(price: number): number {
@@ -126,7 +127,7 @@ export function quoteContracts(state: MarketState, side: Side, contracts: number
   if (delta === 0) {
     throw new EngineError(
       "INVALID_CONTRACTS",
-      `contracts round to zero at six decimals: ${String(contracts)}`,
+      `contracts round to zero at six decimals: ${describe(contracts)}`,
     );
   }
   const stateAfter = applyContracts(state, side, delta);

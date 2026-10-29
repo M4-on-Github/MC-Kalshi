@@ -93,3 +93,67 @@ describe("hostile inputs", () => {
     );
   });
 });
+
+describe("final adversarial pass (cycle 3, Low findings)", () => {
+  const fresh: MarketState = { qYes: 0, qNo: 0, b: 100 };
+
+  it("rejects a null-prototype state with INVALID_STATE, not a TypeError", () => {
+    expect(codeOf(() => quoteContracts(Object.create(null) as never, "YES", 1))).toBe(
+      "INVALID_STATE",
+    );
+  });
+
+  it("rejects a state whose qYes getter throws with INVALID_STATE", () => {
+    const hostile = {
+      get qYes(): number {
+        throw new Error("boom");
+      },
+      qNo: 0,
+      b: 100,
+    };
+    expect(codeOf(() => quoteContracts(hostile as never, "YES", 1))).toBe("INVALID_STATE");
+  });
+
+  it("rejects a state whose fields are null-prototype objects with INVALID_STATE", () => {
+    const odd = Object.create(null);
+    expect(codeOf(() => quoteContracts({ qYes: odd, qNo: 0, b: 100 } as never, "YES", 1))).toBe(
+      "INVALID_STATE",
+    );
+    expect(codeOf(() => quoteContracts({ qYes: 0, qNo: 0, b: odd } as never, "YES", 1))).toBe(
+      "INVALID_STATE",
+    );
+  });
+
+  it("rejects a null-prototype budget with INVALID_POINTS", () => {
+    expect(codeOf(() => quotePoints(fresh, "YES", Object.create(null) as never))).toBe(
+      "INVALID_POINTS",
+    );
+  });
+
+  it("rejects a budget whose toString throws with INVALID_POINTS", () => {
+    const fn = Object.assign(() => 0, {
+      toString(): string {
+        throw new Error("boom");
+      },
+    });
+    expect(codeOf(() => quotePoints(fresh, "YES", fn as never))).toBe("INVALID_POINTS");
+  });
+
+  it("rejects null-prototype contracts and sides with EngineError", () => {
+    const odd = Object.create(null);
+    expect(codeOf(() => quoteContracts(fresh, "YES", odd as never))).toBe("INVALID_CONTRACTS");
+    expect(codeOf(() => quoteContracts(fresh, odd as never, 1))).toBe("INVALID_SIDE");
+  });
+
+  it("tradeCost of −0 contracts is +0", () => {
+    expect(Object.is(tradeCost(fresh, "YES", -0), 0)).toBe(true);
+    expect(Object.is(tradeCost(fresh, "NO", -0), 0)).toBe(true);
+  });
+
+  it("stateAfter never carries −0", () => {
+    const q = quoteContracts({ qYes: 0, qNo: -0, b: 100 }, "YES", 1);
+    expect(Object.is(q.stateAfter.qNo, 0)).toBe(true);
+    const r = quoteContracts({ qYes: -0, qNo: 0, b: 100 }, "NO", 1);
+    expect(Object.is(r.stateAfter.qYes, 0)).toBe(true);
+  });
+});

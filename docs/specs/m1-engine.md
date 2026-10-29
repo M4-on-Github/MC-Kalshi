@@ -1,5 +1,5 @@
 # M1 — Market engine (LMSR)
-Status: in-progress · Milestone: M1 · Research: docs/research/kalshi/order-ticket.md (ticket semantics) · ADRs: 0002 (LMSR), 0004 (TDD)
+Status: in-progress (review complete; ship pending) · Milestone: M1 · Research: docs/research/kalshi/order-ticket.md (ticket semantics) · ADRs: 0002 (LMSR), 0004 (TDD)
 
 ## Problem
 Every later slice (order ticket, trade action, resolution, void, leaderboard) needs one trusted source of market math. If prices, costs, and payouts are computed in more than one place, or with floating-point carelessness, points leak and the ledger stops balancing. M1 builds that math once, pure and property-tested, before any of it touches a database or a screen.
@@ -76,22 +76,22 @@ export const MAX_POINTS = 1e12;   // cap on budgets and |costBasisPoints|
 export const CONTRACT_PAYOUT_POINTS = 100, PRICE_MIN = 1, PRICE_MAX = 99;
 export function clampProbability(p: number): number;
 ```
-This is exactly what `src/index.ts` exports. `fitContractsToBudget` and `logProbabilities` are exported from `lmsr.ts` for tests only and are not re-exported. `errors.ts` also holds `assertSide(value)` and `assertOutcome(value)`, which accept only the exact strings `"YES"` and `"NO"` and throw `INVALID_SIDE` otherwise (so `"yes"`, `"VOID"` and `undefined` are rejected); `tradeCost`, `quoteContracts` and `quotePoints` call `assertSide` first, and `payout` calls `assertOutcome`. `assertPosition(position)` checks a settlement input (an object with finite holdings in 0..`MAX_CONTRACTS` and an integer cost basis within ±`MAX_POINTS`, else `INVALID_STATE` / `INVALID_CONTRACTS` / `INVALID_POINTS`); `payout` and `voidRefund` call it, so malformed input (including `null`, `undefined` or a `Symbol`) always raises `EngineError`, never a `TypeError`. Error messages interpolate user values through `String(value)` for the same reason.
+This is exactly what `src/index.ts` exports. `fitContractsToBudget` and `logProbabilities` are exported from `lmsr.ts` for tests only and are not re-exported. `errors.ts` also holds `assertSide(value)` and `assertOutcome(value)`, which accept only the exact strings `"YES"` and `"NO"` and throw `INVALID_SIDE` otherwise (so `"yes"`, `"VOID"` and `undefined` are rejected); `tradeCost`, `quoteContracts` and `quotePoints` call `assertSide` first, and `payout` calls `assertOutcome`. `assertPosition(position)` checks a settlement input (an object with finite holdings in 0..`MAX_CONTRACTS` and an integer cost basis within ±`MAX_POINTS`, else `INVALID_STATE` / `INVALID_CONTRACTS` / `INVALID_POINTS`); `payout` and `voidRefund` call it, so malformed input (including `null`, `undefined` or a `Symbol`) always raises `EngineError`, never a `TypeError`. Error messages interpolate user values through `describe(value)` in `errors.ts` (objects print as `[object]`, anything whose conversion throws as `[unprintable]`), and `assertState` / `assertPosition` read fields inside a `try`, so a null-prototype object, a value whose `toString` throws, or a Proxy whose getter throws still raises `EngineError`. Results never carry `-0`: `tradeCost`, `payout` and both components of `stateAfter` are normalized to `+0`.
 
 Errors are thrown as `EngineError` with a `code` so the server can map them to user messages without parsing text. `quotePoints` inverts the budget in the log domain and returns a quote for any representable state, including one where a side's probability has underflowed to 0; it throws `INVALID_POINTS` only if the amount is not an integer in 1..`MAX_POINTS`, buys less than one micro-contract, or would trade more than `MAX_CONTRACTS` or push the side's `q` beyond it (a fill capped there is returned only if it still costs the whole budget, e.g. 99999996535 points buy exactly 1e9 contracts on a fresh b=50 market; otherwise `INVALID_POINTS`, "this market cannot absorb that budget"). `quoteContracts` throws `INVALID_CONTRACTS` for a trade larger than `MAX_CONTRACTS` or one that would move `q` beyond `±MAX_CONTRACTS`.
 
 ## Acceptance criteria
-- [ ] Given any finite `MarketState` with `b` in 50..500, when `probabilityYes` runs, then `0 ≤ p ≤ 1`, `p + probabilityYes(swapped sides) = 1` within 1e-12, and strictly `0 < p < 1` while `|qYes − qNo|/b < 36` (invariant 1; beyond that gap `1 − p` is below one ulp of 1 in double precision).
-- [ ] Given a state, when `quoteContracts(state, side, 0)` runs, then it throws `INVALID_CONTRACTS`; for `Δ > 0` the unrounded cost is strictly increasing and convex in `Δ` (invariant 2).
-- [ ] Given a state and `Δ > 0`, when a buy of `Δ` is followed by a sell of `Δ` on the same side from `stateAfter`, then `proceeds ≤ cost` after rounding (invariant 3).
-- [ ] Given any random sequence of up to 200 quotes applied in order, when the pool's liability (`costFunction(state) − costFunction(initial)` versus worst-case payout) is tracked, then it never exceeds `maxPoolLoss(b)` (invariant 4).
-- [ ] Given a state and a budget `c ≥ 1` point, when `quotePoints` runs, then `costPoints ≤ c` and `c − costPoints < 1` whenever `c` buys at least one micro-contract, and the function terminates within three rounding adjustments (invariant 5).
-- [ ] Given any set of positions and the trades that produced them, when every trade is reversed in reverse order and `voidRefund` is paid, then each user's net points equal zero (invariant 6).
-- [ ] Given `b = 100`, `q = (0, 0)`, when 500 points buy YES, then `contracts` is within 0.01 of 9.76, `avgPrice` is 51, `probAfter` is within 0.001 of 0.524, and `payoutIfWin` is 976 (worked example, architecture §5).
-- [ ] Given a side whose probability has underflowed to exactly 0 (gap beyond ~745·b), when `tradeCost`, `quoteContracts` or `quotePoints` run, then every result is finite (`lmsr.underflow.test.ts`).
-- [ ] Given extreme but finite states (`|q| up to 10⁶`, `b = 50` or `500`), when any function runs, then no result is `NaN` or `±Infinity` (log-sum-exp).
-- [ ] Given `npx vitest run --coverage` in `packages/engine`, then lines and branches are both at least 95 % and the run fails below that.
-- [ ] Given `npm run typecheck && npm run lint && npm test` at the root, then all exit 0; CI green on the branch.
+- [x] Given any finite `MarketState` with `b` in 50..500, when `probabilityYes` runs, then `0 ≤ p ≤ 1`, `p + probabilityYes(swapped sides) = 1` within 1e-12, and strictly `0 < p < 1` while `|qYes − qNo|/b < 36` (invariant 1; beyond that gap `1 − p` is below one ulp of 1 in double precision).
+- [x] Given a state, when `quoteContracts(state, side, 0)` runs, then it throws `INVALID_CONTRACTS`; for `Δ > 0` the unrounded cost is strictly increasing and convex in `Δ` (invariant 2). Convexity is asserted on the exact cost at the granularity the property tests use (`Δ` steps well above one micro-contract); at micro-contract granularity the second difference of the computed cost can be one ulp negative (−1.5e-5 points at `Δ ≈ 1e9`), so convexity is a property of the formula, verified statistically, not a bit-level guarantee. Strict monotonicity held at every probe.
+- [x] Given a state and `Δ > 0`, when a buy of `Δ` is followed by a sell of `Δ` on the same side from `stateAfter`, then `proceeds ≤ cost` after rounding (invariant 3).
+- [x] Given any random sequence of up to 200 quotes applied in order, when the pool's liability (`costFunction(state) − costFunction(initial)` versus worst-case payout) is tracked, then it never exceeds `maxPoolLoss(b)` (invariant 4).
+- [x] Given a state and a budget `c ≥ 1` point, when `quotePoints` runs, then `costPoints ≤ c` and `c − costPoints < 1` whenever `c` buys at least one micro-contract, and the fit is an exact search on integer micro-contracts (at most 64 bisection steps plus 4 forward probes, one quote each) (invariant 5).
+- [x] Given any set of positions and the trades that produced them, when every trade is reversed in reverse order and `voidRefund` is paid, then each user's net points equal zero (invariant 6).
+- [x] Given `b = 100`, `q = (0, 0)`, when 500 points buy YES, then `contracts` is within 0.01 of 9.76, `avgPrice` is 51, `probAfter` is within 0.001 of 0.524, and `payoutIfWin` is 976 (worked example, architecture §5).
+- [x] Given a side whose probability has underflowed to exactly 0 (gap beyond ~745·b), when `tradeCost`, `quoteContracts` or `quotePoints` run, then every result is finite (`lmsr.underflow.test.ts`).
+- [x] Given extreme but finite states (`|q| up to 10⁶`, `b = 50` or `500`), when any function runs, then no result is `NaN` or `±Infinity` (log-sum-exp).
+- [x] Given `npx vitest run --coverage` in `packages/engine`, then lines and branches are both at least 95 % and the run fails below that.
+- [x] Given `npm run typecheck && npm run lint && npm test` at the root, then all exit 0; CI green on the branch.
 
 ## Tech stack
 No change to the stack table in `m0-scaffold.md`. New dev dependency: `@vitest/coverage-v8` (same major as Vitest 5).
@@ -159,6 +159,7 @@ None. The quote's fields are what the M3 order ticket displays (see `docs/resear
 Trade-offs recorded:
 - CI runs the engine suite twice (`npm test`, then the coverage run), roughly ten seconds extra per push; accepted so the root `npm test` stays the single local gate.
 - A buy whose exact cost is below one point costs one point.
+- Convexity (invariant 2) is asserted on the exact cost at the property tests' granularity (`Δ` steps well above one micro-contract). At micro-contract granularity the second difference of the computed cost can be one ulp negative (−1.5e-5 points at `Δ ≈ 1e9`), so convexity is a property of the formula, verified statistically, not a bit-level guarantee. Strict monotonicity held at every probe.
 - States and trades are capped at 1e9 contracts and budgets at 1e12 points, so every integer result (micro-contracts, points) stays a safe integer.
 - Budgets above roughly 1e11 points are rejected (`INVALID_POINTS`) because they would buy more than the 1e9-contract cap.
 - Invariant 4 holds in exact arithmetic. Floating-point noise of up to about 3e-5 points per trade means an engineered path of dozens of ~1e9-contract trades could, in principle, exceed the bound by a fraction of a point; it needs a ~1e11-point bankroll, which the product's balance cap makes unreachable, so it is accepted and not guarded.
@@ -180,13 +181,25 @@ Dependency graph: errors and rounding → probability and cost → quote by cont
    - **Checkpoint B**: coverage ≥ 95 %; CI green; review passes (`/code-review`, `/agent-skills:review`) and the `doubt-driven-development` adversarial pass on the math, with findings recorded below.
 7. **Docs and ship** (S, 2 files: `docs/architecture.md` §5 if anything changed, this spec) — Acceptance: §5 matches the code's rounding and the worked example as computed; spec DoD ticked; `/agent-skills:ship`; squash-merge; mark `done`.
 
+## Review (SOP-02 step 6)
+| Pass | Findings | Outcome |
+|---|---|---|
+| 1. `/code-review high` bug hunt | 10 | All addressed: Infinity on underflowed sides (log-domain math); wrong error codes for huge budgets; the user-favoring micro-point snap replaced by a capped 1e-12 relative tolerance plus a one-point minimum per buy; property generator bounded to double precision's normal range; doc drift; `q` snapped to the six-decimal grid; shared validation helpers; CI double-run accepted; public surface documented. |
+| 2. Adversarial cycle 1 (`doubt-driven-development`, fresh-context reviewer) | 7 | Fixed the uncapped tolerance, the missing magnitude caps (`MAX_CONTRACTS` 1e9, `MAX_POINTS` 1e12), runtime validation of side/outcome/state shape, exact-cost average price, cancellation-free log-probabilities; two documented as trade-offs. |
+| 3. Adversarial cycle 2 | 10 | Fixed the d+(−d) cancellation (unified log-sum-exp trade cost), the budget fit (bisection on integer micro-contracts under the contract cap, forward probes), integer micro-contract payouts (the delta×100 misrounding), Symbol-safe messages, position validation, plain-ceil pool bound; four recorded as trade-offs. |
+| 4. Adversarial cycle 3 | Low only | Fixed in this commit: `describe()`-safe error messages and guarded field reads (null-prototype objects, throwing `toString`, throwing Proxy getters raise `EngineError`); `-0` normalized out of `tradeCost`, `payout` and `stateAfter`; convexity wording above. The loop stopped at the three-cycle bound with 12,000 randomized and targeted executions finding no Critical, High or Medium issue. |
+
+Cross-model second opinion (Codex/Gemini CLI) was offered to the owner and not requested; findings are single-model only.
+
+Verification: 160 tests pass (`npx vitest run --project engine`); coverage 100 % statements (166/166), branches (114/114), functions (40/40) and lines (164/164); Biome, lint and typecheck clean; CI green on the branch at `f9cbfab` (the cycle-3 changes are verified locally and await their CI run on push).
+
 ## Definition of Done
-- [ ] Acceptance criteria met and demonstrated (test or screenshot)
-- [ ] Unit tests for logic; Playwright for any user-visible flow that moves points (none in M1)
-- [ ] `npm run typecheck && npm run lint && npm test` green locally and in CI
-- [ ] No secrets in code; new env vars documented in `.env.example` (none in M1)
-- [ ] Docs or ADR updated when behavior or a decision changed
-- [ ] Preview deploy checked by a human (not applicable: no user-visible change)
+- [x] Acceptance criteria met and demonstrated (test or screenshot)
+- [x] Unit tests for logic; Playwright for any user-visible flow that moves points (none in M1)
+- [x] `npm run typecheck && npm run lint && npm test` green locally and in CI
+- [x] No secrets in code; new env vars documented in `.env.example` (none in M1)
+- [x] Docs or ADR updated when behavior or a decision changed
+- [x] Preview deploy checked by a human (not applicable: no user-visible change)
 
 ## Next
 _Updated at the end of each session._

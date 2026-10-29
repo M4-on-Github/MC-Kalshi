@@ -9,7 +9,8 @@ const MICRO = 1e6;
 const RELATIVE_TOLERANCE = 1e-12;
 const MAX_TOLERANCE = 1e-6;
 
-function noNegativeZero(x: number): number {
+/** Maps −0 to +0; every other value passes through. */
+export function noNegativeZero(x: number): number {
   return x === 0 ? 0 : x;
 }
 
