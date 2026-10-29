@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { CONTRACT_PAYOUT_POINTS, PRICE_MAX, PRICE_MIN, clampProbability } from "./index.js";
+import { CONTRACT_PAYOUT_POINTS, clampProbability, PRICE_MAX, PRICE_MIN } from "./index.js";
 
 describe("engine constants", () => {
   it("match architecture §5: a contract pays 100 points and quotes live in 1..99", () => {
