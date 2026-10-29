@@ -5,8 +5,9 @@ import { buildHealth } from "@/lib/health";
 export const dynamic = "force-dynamic";
 
 export async function GET(): Promise<Response> {
+  const db = getDb();
   const { status, body } = await buildHealth({
-    dbCheck: getDb() ? pingDatabase : undefined,
+    dbCheck: db ? () => pingDatabase(db) : undefined,
     commit: process.env.VERCEL_GIT_COMMIT_SHA,
   });
   return Response.json(body, { status });

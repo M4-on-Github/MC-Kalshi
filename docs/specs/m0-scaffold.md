@@ -106,7 +106,7 @@ vitest.config.mts              projects: packages/engine, apps/web
 
 ## Code style
 
-Biome defaults: 2-space indent, double quotes, semicolons, trailing commas, 100-column lines. Named exports everywhere except Next.js route files, which must default-export. Exported functions carry explicit return types. Inputs are typed at the boundary and never trusted (`unknown` in, validated out). No `any`, no non-null assertions in product code.
+Biome defaults: 2-space indent, double quotes, semicolons, trailing commas, 100-column lines. Named exports everywhere except Next.js route files, which must default-export. Exported functions carry explicit return types, except React components, which follow the create-next-app convention of inferred JSX return types. Inputs are typed at the boundary and never trusted (`unknown` in, validated out). No `any`, no non-null assertions in product code.
 
 ```ts
 // packages/engine/src/index.ts

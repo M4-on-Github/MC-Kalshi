@@ -5,12 +5,18 @@ import * as schema from "./schema";
 
 // Server only: never import this module from a client component.
 // Supabase's transaction pooler needs `prepare: false`; one connection per serverless instance.
-// `connect_timeout` is kept under the health route's 2 s budget plus slack so a stuck connect
-// cannot hold the single connection for long.
+// `connect_timeout` (5 s) sits above the health route's 2 s budget so a slow-but-live pooler is
+// not mistaken for dead, yet frees the single connection quickly when a connect is stuck. `ssl: "require"` encrypts the session even when the URL
+// carries no `sslmode`; move to "verify-full" with Supabase's CA before M2 stores user data.
 function createClient(url: string) {
-  return drizzle(postgres(url, { max: 1, prepare: false, idle_timeout: 20, connect_timeout: 5 }), {
-    schema,
+  const client = postgres(url, {
+    max: 1,
+    prepare: false,
+    idle_timeout: 20,
+    connect_timeout: 5,
+    ssl: "require",
   });
+  return drizzle(client, { schema });
 }
 
 export type Db = ReturnType<typeof createClient>;
@@ -30,10 +36,6 @@ export function getDb(): Db | undefined {
 }
 
 /** Cheapest possible round-trip, used by `GET /api/health`. */
-export async function pingDatabase(): Promise<void> {
-  const db = getDb();
-  if (!db) {
-    throw new Error("DATABASE_URL is not configured");
-  }
+export async function pingDatabase(db: Db): Promise<void> {
   await db.execute(sql`select 1`);
 }

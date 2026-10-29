@@ -14,7 +14,7 @@ export interface HealthResult {
 export interface HealthInput {
   /** Resolves when the database answers. `undefined` means no `DATABASE_URL` is configured. */
   readonly dbCheck: (() => Promise<void>) | undefined;
-  /** Git commit the server was built from; defaults to "dev". */
+  /** Git commit the server was built from; empty or missing becomes "dev". */
   readonly commit?: string;
   readonly timeoutMs?: number;
 }
@@ -26,7 +26,7 @@ const DEFAULT_TIMEOUT_MS = 2_000;
  * The failure branch deliberately drops the cause: driver errors can echo the connection string.
  */
 export async function buildHealth(input: HealthInput): Promise<HealthResult> {
-  const commit = input.commit ?? "dev";
+  const commit = input.commit || "dev";
   if (input.dbCheck === undefined) {
     return { status: 200, body: { ok: true, db: "unconfigured", commit } };
   }

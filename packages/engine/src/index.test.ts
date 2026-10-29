@@ -27,6 +27,16 @@ describe("clampProbability", () => {
   it("rejects non-finite input", () => {
     expect(() => clampProbability(Number.NaN)).toThrow(RangeError);
     expect(() => clampProbability(Number.POSITIVE_INFINITY)).toThrow(RangeError);
+    expect(() => clampProbability(Number.NEGATIVE_INFINITY)).toThrow(RangeError);
+  });
+
+  it("property: in-range input is returned unchanged", () => {
+    fc.assert(
+      fc.property(fc.double({ min: 0.01, max: 0.99, noNaN: true }), (p) => {
+        expect(clampProbability(p)).toBe(p);
+      }),
+      { numRuns: 500 },
+    );
   });
 
   it("property: result is always within [PRICE_MIN/100, PRICE_MAX/100] and idempotent", () => {
