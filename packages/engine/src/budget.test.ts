@@ -96,7 +96,8 @@ describe("invariant 5: budget inversion never overspends and lands within a poin
           const half = Math.floor(points / 2);
           const first = quotePoints(state, side, half);
           const second = quotePoints(first.stateAfter, side, points - half);
-          expect(first.contracts + second.contracts).toBeLessThanOrEqual(whole.contracts + 1e-6);
+          // Each leg floors to six decimals, so two legs may land up to two micro-contracts apart.
+          expect(first.contracts + second.contracts).toBeLessThanOrEqual(whole.contracts + 2e-6);
         },
       ),
       { numRuns: 300 },

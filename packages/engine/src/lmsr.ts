@@ -138,7 +138,9 @@ export function quotePoints(state: MarketState, side: Side, points: number): Quo
   }
   const exact =
     state.b * Math.log1p(Math.expm1(points / (CONTRACT_PAYOUT_POINTS * state.b)) / pSide);
-  let delta = floorContracts(exact);
+  // A nanocontract nudge keeps grid-exact answers (e.g. 16031.58 − 1e-12) from flooring one
+  // micro-contract short; the loop below still guarantees the budget is never exceeded.
+  let delta = floorContracts(exact + 1e-9);
   for (let attempt = 0; attempt < 4; attempt++) {
     if (delta <= 0) {
       throw new EngineError("INVALID_POINTS", `${points} points buy less than one micro-contract`);
