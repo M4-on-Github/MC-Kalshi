@@ -69,7 +69,7 @@ export class EngineError extends RangeError { readonly code: "INVALID_STATE" | "
 Errors are thrown as `EngineError` with a `code` so the server can map them to user messages without parsing text.
 
 ## Acceptance criteria
-- [ ] Given any finite `MarketState` with `b` in 50..500, when `probabilityYes` runs, then `0 < p < 1` and `p + probabilityYes(swapped sides) = 1` within 1e-12 (invariant 1).
+- [ ] Given any finite `MarketState` with `b` in 50..500, when `probabilityYes` runs, then `0 ≤ p ≤ 1`, `p + probabilityYes(swapped sides) = 1` within 1e-12, and strictly `0 < p < 1` while `|qYes − qNo|/b < 36` (invariant 1; beyond that gap `1 − p` is below one ulp of 1 in double precision).
 - [ ] Given a state, when `quoteContracts(state, side, 0)` runs, then it throws `INVALID_CONTRACTS`; for `Δ > 0` the unrounded cost is strictly increasing and convex in `Δ` (invariant 2).
 - [ ] Given a state and `Δ > 0`, when a buy of `Δ` is followed by a sell of `Δ` on the same side from `stateAfter`, then `proceeds ≤ cost` after rounding (invariant 3).
 - [ ] Given any random sequence of up to 200 quotes applied in order, when the pool's liability (`costFunction(state) − costFunction(initial)` versus worst-case payout) is tracked, then it never exceeds `maxPoolLoss(b)` (invariant 4).

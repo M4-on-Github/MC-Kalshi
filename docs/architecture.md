@@ -114,15 +114,28 @@ max pool loss per market = 100 · b · ln 2                         b = 100 → 
 
 Implementation rules:
 - Compute with log-sum-exp (subtract `max(q)/b` first) to avoid overflow. Store only `q`, never prices.
+- The cost of one trade is not `C(after) − C(before)` (that cancels catastrophically for micro-trades
+  and for sells at prices within a few ulps of 1). It is `100·b·ln(p_other + p_side·e^{Δ/b})` with
+  `p_other` taken from its own exponential, never as `1 − p`; implemented as `log1p(p_side·expm1(Δ/b))`
+  for every buy and for sells of up to one `b`, and as log-sum-exp forms beyond that (`tradeCost`).
+- Budget inversion in the same spirit: `Δ = b·log1p(expm1(c/(100·b)) / p_side)`, floored to 6 dp
+  (plus a nanocontract nudge so grid-exact answers are not lost), then re-quoted; the rounded cost
+  is at or under the budget by construction.
+- In double precision `p_yes` reaches exactly 1 once `(q_y − q_n)/b` exceeds about 36.7 (ln 2⁵³) and
+  exactly 0 below about −745; quoting still works there, but a budget cannot be inverted on a side
+  whose price has saturated to 0 (`INVALID_STATE`).
 - **Rounding always favors the pool**: a buy's cost rounds **up** to a whole point; a sell's
-  proceeds round **down**. Contracts are kept to 6 dp.
+  proceeds round **down**; payouts round **down**. Contracts are kept to 6 dp. Point values are
+  snapped to a micro-point (1e-6) before rounding so floating-point noise cannot move a whole-point
+  boundary; a trade whose exact cost is below a micro-point therefore costs 0, which the server's
+  minimum trade size (M3) makes unreachable.
 - One function produces both the quote shown in the ticket and the fill executed server-side:
   `{ contracts, costPoints, avgPrice, probBefore, probAfter, payoutIfWin }`. The server
   rejects a fill whose price moved beyond the user's slippage tolerance (default 2 points).
 - Default `b = 100`; moderators may set 50–500 per market.
 
 Properties the test suite asserts (Vitest + fast-check):
-1. `p_yes + p_no = 1` and `0 < p < 1` for all finite `q`.
+1. `p_yes + p_no = 1` and `0 ≤ p ≤ 1` for all finite `q`; strictly `0 < p < 1` while `|q_y − q_n|/b < 36`.
 2. `cost(0) = 0`; cost is strictly increasing and convex in Δ.
 3. Buy then sell the same Δ never returns more than was paid (after rounding).
 4. Pool liability never exceeds `100·b·ln 2` under any random trade sequence.
@@ -130,8 +143,8 @@ Properties the test suite asserts (Vitest + fast-check):
 6. Void: reversing every trade returns each user exactly to their pre-market balance.
 
 Worked example: `b = 100`, fresh market `q = (0, 0)`, `p = 0.50`. Spend 500 points on YES:
-`Δ = 100 · ln(2·e^{0.05} − 1) ≈ 9.75` contracts, avg price ≈ 51, new `p_yes ≈ 0.524`,
-payout if YES = 976 points.
+`Δ = 100 · ln(2·e^{0.05} − 1) ≈ 9.7619` contracts, avg price 51, new `p_yes ≈ 0.5244`,
+payout if YES = 976 points (the engine's property suite pins these numbers).
 
 ## 6. Key flows
 
