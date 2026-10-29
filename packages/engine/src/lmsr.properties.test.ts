@@ -6,7 +6,9 @@ import type { MarketState, Side } from "./types";
 
 // Trades in a campus market never push |q| anywhere near 1e6; keep states where the price is
 // still representable so monotonicity and convexity are meaningful (p saturates beyond ~700·b).
-const q = fc.double({ min: -2e4, max: 2e4, noNaN: true });
+// |q| ≤ 1e4 with b ≥ 50 keeps every side's price a normal double (≥ e^-400); beyond ~740·b the
+// price is a denormal and two micro-trades can cost the same unrepresentable amount (seen on CI).
+const q = fc.double({ min: -1e4, max: 1e4, noNaN: true });
 const b = fc.double({ min: B_MIN, max: B_MAX, noNaN: true });
 const stateArb: fc.Arbitrary<MarketState> = fc.record({ qYes: q, qNo: q, b });
 const sideArb: fc.Arbitrary<Side> = fc.constantFrom("YES", "NO");
