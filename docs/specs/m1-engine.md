@@ -1,5 +1,5 @@
 # M1 — Market engine (LMSR)
-Status: in-progress (review complete; ship pending) · Milestone: M1 · Research: docs/research/kalshi/order-ticket.md (ticket semantics) · ADRs: 0002 (LMSR), 0004 (TDD)
+Status: in-progress (paused before ship; see Next) · Milestone: M1 · Research: docs/research/kalshi/order-ticket.md (ticket semantics) · ADRs: 0002 (LMSR), 0004 (TDD)
 
 ## Problem
 Every later slice (order ticket, trade action, resolution, void, leaderboard) needs one trusted source of market math. If prices, costs, and payouts are computed in more than one place, or with floating-point carelessness, points leak and the ledger stops balancing. M1 builds that math once, pure and property-tested, before any of it touches a database or a screen.
@@ -202,4 +202,9 @@ Verification: 160 tests pass (`npx vitest run --project engine`); coverage 100 %
 - [x] Preview deploy checked by a human (not applicable: no user-visible change)
 
 ## Next
-_Updated at the end of each session._
+
+Paused 2026-10-29 at the owner's request, on branch `feat/m1-engine-r2` at `43a99e8` (pushed to `origin`; CI green; 169 tests; engine coverage 100 %). Tasks 1–6 are done and reviewed (bug hunt plus three adversarial cycles, all recorded above). Remaining when work resumes:
+1. SOP-02 step 7, ship: re-run `/agent-skills:ship` on `main...feat/m1-engine-r2` (the three specialist reviews were started and then stopped at the pause, so their reports do not exist); fold any finding into a last commit; write the "Ship decision" section here.
+2. Squash-merge `feat/m1-engine-r2` into `main` (a temporary worktree keeps the checkout stable if agents are reading files), push `main` to `origin`, sync the fork with GitHub's "Sync fork" button (pushes to the fork are still permission-denied from this machine), confirm CI on `main` and that production still serves `/`.
+3. Mark this spec `done`, update `docs/specs/README.md`, and ask the owner to delete the stale remote branches `feat/m1-engine`, `feat/theme`, `fix/vercel-typescript`, `fix/vercel-vitest`.
+4. Then M2: spec `docs/specs/m2-auth-markets.md` (Supabase Auth email OTP with the domain hook, profiles, balances, market list and detail, seeded markets), built on the theme in `docs/design/theme.md`.
