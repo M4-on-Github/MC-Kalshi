@@ -1,5 +1,11 @@
 import { CONTRACT_PAYOUT_POINTS, PRICE_MAX, PRICE_MIN } from "./constants";
-import { assertContracts, assertPoints, assertState, EngineError } from "./errors";
+import {
+  assertContracts,
+  assertFiniteContracts,
+  assertPoints,
+  assertState,
+  EngineError,
+} from "./errors";
 import { ceilPoints, floorContracts, floorPoints, roundContracts } from "./rounding";
 import type { MarketState, Quote, Side } from "./types";
 
@@ -7,7 +13,9 @@ import type { MarketState, Quote, Side } from "./types";
  * Logarithmic market scoring rule, two outcomes (ADR-0002, architecture §5):
  *   C(qY, qN) = 100 · b · ln(e^{qY/b} + e^{qN/b})
  *   p_yes     = e^{qY/b} / (e^{qY/b} + e^{qN/b})
- * Everything is computed through log-sum-exp (subtract max(q)/b first) so no exponent overflows.
+ * Probabilities are computed through log-sum-exp (subtract max(q)/b first) so no exponent
+ * overflows. Trade costs and budget inversion work in the log domain, where ln p_yes and ln p_no
+ * stay finite for every finite q even when the probabilities themselves underflow to 0.
  */
 interface Scaled {
   readonly m: number;
@@ -22,6 +30,31 @@ function scaled(state: MarketState): Scaled {
     ey: Math.exp(state.qYes / state.b - m),
     en: Math.exp(state.qNo / state.b - m),
   };
+}
+
+interface LogProbs {
+  readonly logPYes: number;
+  readonly logPNo: number;
+}
+
+function logProbabilities(state: MarketState): LogProbs {
+  const ay = state.qYes / state.b;
+  const an = state.qNo / state.b;
+  const m = Math.max(ay, an);
+  const logSum = m + Math.log(Math.exp(ay - m) + Math.exp(an - m));
+  return { logPYes: ay - logSum, logPNo: an - logSum };
+}
+
+/** ln(e^a + e^b) without overflow. */
+function logAddExp(a: number, b: number): number {
+  const hi = Math.max(a, b);
+  const lo = Math.min(a, b);
+  return hi + Math.log1p(Math.exp(lo - hi));
+}
+
+/** ln(1 + e^t) without overflow. */
+function softplus(t: number): number {
+  return t > 36 ? t + Math.log1p(Math.exp(-t)) : Math.log1p(Math.exp(t));
 }
 
 /**
@@ -42,40 +75,35 @@ export function costFunction(state: MarketState): number {
 }
 
 /**
- * Exact cost of moving `delta` contracts on `side`, in points, unrounded:
- *   C(q + Δ·e_side) − C(q) = 100 · b · ln(p_other + p_side · e^{Δ/b})
- * The other side's probability is taken from its own exponential, never as 1 − p, so a sell at a
- * price within a few ulps of 1 cannot cancel catastrophically. Three branches keep full precision:
- * log1p/expm1 for every buy and for sells of up to one b, and log-sum-exp forms beyond that.
+ * (C(q + Δ·e_side) − C(q)) / (100·b) = ln(p_other + p_side · e^{d}) with d = Δ / b.
+ * Three branches keep full precision: log1p/expm1 for every buy and for sells of up to one b
+ * (the argument stays above −0.64, so nothing cancels), and log-sum-exp forms beyond that.
  */
+function tradeValue(lp: LogProbs, side: Side, d: number): number {
+  const logPSide = side === "YES" ? lp.logPYes : lp.logPNo;
+  const logPOther = side === "YES" ? lp.logPNo : lp.logPYes;
+  if (d >= -1 && d <= 700) {
+    return Math.log1p(Math.exp(logPSide) * Math.expm1(d));
+  }
+  if (d > 700) {
+    return d + logAddExp(logPOther - d, logPSide);
+  }
+  return logAddExp(logPOther, logPSide + d);
+}
+
+/** Exact cost of moving `delta` contracts on `side`, in points, unrounded. */
 export function tradeCost(state: MarketState, side: Side, delta: number): number {
   assertState(state);
-  if (!Number.isFinite(delta)) {
-    throw new EngineError("INVALID_CONTRACTS", `contracts must be finite, got ${delta}`);
-  }
-  const { ey, en } = scaled(state);
-  const total = ey + en;
-  const pSide = (side === "YES" ? ey : en) / total;
-  const pOther = (side === "YES" ? en : ey) / total;
-  const d = delta / state.b;
-  let value: number;
-  if (d >= -1 && d <= 700) {
-    // Well conditioned for every buy and for sells of up to one b: the argument stays above −0.64.
-    value = Math.log1p(pSide * Math.expm1(d));
-  } else if (d > 700) {
-    // expm1 would overflow; the cost is huge here so the subtraction's absolute error is immaterial.
-    value = d + Math.log(pOther * Math.exp(-d) + pSide);
-  } else {
-    // Large sell: both terms are positive, and pOther comes from its own exponential, not 1 − p.
-    value = Math.log(pOther + pSide * Math.exp(d));
-  }
+  assertFiniteContracts(delta);
+  const value = tradeValue(logProbabilities(state), side, delta / state.b);
   return CONTRACT_PAYOUT_POINTS * state.b * value;
 }
 
 function applyContracts(state: MarketState, side: Side, delta: number): MarketState {
+  // Keep q on the six-decimal grid; fifty 0.1-contract buys would otherwise drift to 4.999999999999998.
   return side === "YES"
-    ? { qYes: state.qYes + delta, qNo: state.qNo, b: state.b }
-    : { qYes: state.qYes, qNo: state.qNo + delta, b: state.b };
+    ? { qYes: roundContracts(state.qYes + delta), qNo: state.qNo, b: state.b }
+    : { qYes: state.qYes, qNo: roundContracts(state.qNo + delta), b: state.b };
 }
 
 function clampPrice(price: number): number {
@@ -84,7 +112,8 @@ function clampPrice(price: number): number {
 
 /**
  * Quote (and, server-side, fill) a trade of `contracts` on `side`: positive buys, negative sells.
- * Cost rounds up for buys and proceeds round down for sells; contracts keep six decimals.
+ * Cost rounds up for buys and is never below one point; proceeds round down for sells;
+ * contracts keep six decimals.
  */
 export function quoteContracts(state: MarketState, side: Side, contracts: number): Quote {
   assertState(state);
@@ -97,10 +126,11 @@ export function quoteContracts(state: MarketState, side: Side, contracts: number
     );
   }
   const stateAfter = applyContracts(state, side, delta);
-  const rawCost = tradeCost(state, side, delta);
+  const value = tradeValue(logProbabilities(state), side, delta / state.b);
+  const rawCost = CONTRACT_PAYOUT_POINTS * state.b * value;
   let costPoints: number;
   if (delta > 0) {
-    costPoints = ceilPoints(rawCost);
+    costPoints = Math.max(1, ceilPoints(rawCost));
   } else {
     const proceeds = floorPoints(-rawCost);
     costPoints = proceeds === 0 ? 0 : -proceeds;
@@ -120,33 +150,30 @@ export function quoteContracts(state: MarketState, side: Side, contracts: number
 
 /**
  * Buy with a points budget: the largest six-decimal amount of contracts whose rounded cost does
- * not exceed `points`. The closed form from architecture §5, rewritten for precision:
- *   Δ = b · log1p( expm1(c / (100·b)) / p_side )
- * Flooring Δ to six decimals already keeps the cost at or under the budget; the loop only
- * exists for floating-point noise and is bounded (the property test asserts it never iterates).
+ * not exceed `points`. The closed form from architecture §5 in the log domain:
+ *   Δ / b = ln(1 + expm1(c / (100·b)) / p_side) = softplus( ln expm1(c/(100·b)) − ln p_side )
+ * which stays finite for any budget and any representable state.
  */
 export function quotePoints(state: MarketState, side: Side, points: number): Quote {
   assertState(state);
   assertPoints(points);
-  const { ey, en } = scaled(state);
-  const pSide = (side === "YES" ? ey : en) / (ey + en);
-  if (pSide === 0) {
-    throw new EngineError(
-      "INVALID_STATE",
-      `the price of ${side} has saturated to zero; a budget cannot be inverted`,
-    );
+  const lp = logProbabilities(state);
+  const logPSide = side === "YES" ? lp.logPYes : lp.logPNo;
+  const x = points / (CONTRACT_PAYOUT_POINTS * state.b);
+  const logExpm1 = x > 700 ? x : Math.log(Math.expm1(x));
+  const exact = state.b * softplus(logExpm1 - logPSide);
+  if (!Number.isFinite(exact)) {
+    throw new EngineError("INVALID_POINTS", `${points} points cannot be priced on this market`);
   }
-  const exact =
-    state.b * Math.log1p(Math.expm1(points / (CONTRACT_PAYOUT_POINTS * state.b)) / pSide);
   return fitContractsToBudget(state, side, exact, points);
 }
 
 /**
- * Floor `exactDelta` to six decimals and make sure its rounded cost fits `points`. Flooring
- * already keeps the cost at or under the budget; the loop exists only for floating-point
- * noise and is bounded. Exported for tests; not part of the package's public surface.
- * A nanocontract nudge keeps grid-exact answers (e.g. 16031.58 − 1e-12) from flooring one
- * micro-contract short.
+ * Floor `exactDelta` to six decimals and make sure its rounded cost fits `points`. Flooring keeps
+ * the cost at or under the budget up to floating-point noise, and the nanocontract nudge keeps
+ * grid-exact answers (e.g. 16031.58 − 1e-12) from flooring one micro-contract short; when the
+ * nudge or noise overshoots by a point, the bounded loop steps back a micro-contract at a time.
+ * Exported for tests; not part of the package's public surface.
  */
 export function fitContractsToBudget(
   state: MarketState,

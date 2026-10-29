@@ -17,21 +17,29 @@ export class EngineError extends RangeError {
 export const B_MIN = 50;
 export const B_MAX = 500;
 
+export function assertLiquidity(b: number): void {
+  if (!Number.isFinite(b) || b < B_MIN || b > B_MAX) {
+    throw new EngineError("INVALID_STATE", `b must be within ${B_MIN}..${B_MAX}, got ${b}`);
+  }
+}
+
 export function assertState(state: MarketState): void {
   if (!Number.isFinite(state.qYes) || !Number.isFinite(state.qNo)) {
     throw new EngineError("INVALID_STATE", `q must be finite, got (${state.qYes}, ${state.qNo})`);
   }
-  if (!Number.isFinite(state.b) || state.b < B_MIN || state.b > B_MAX) {
-    throw new EngineError("INVALID_STATE", `b must be within ${B_MIN}..${B_MAX}, got ${state.b}`);
+  assertLiquidity(state.b);
+}
+
+export function assertFiniteContracts(contracts: number): void {
+  if (!Number.isFinite(contracts)) {
+    throw new EngineError("INVALID_CONTRACTS", `contracts must be finite, got ${contracts}`);
   }
 }
 
 export function assertContracts(contracts: number): void {
-  if (!Number.isFinite(contracts) || contracts === 0) {
-    throw new EngineError(
-      "INVALID_CONTRACTS",
-      `contracts must be finite and non-zero, got ${contracts}`,
-    );
+  assertFiniteContracts(contracts);
+  if (contracts === 0) {
+    throw new EngineError("INVALID_CONTRACTS", "contracts must be non-zero");
   }
 }
 
