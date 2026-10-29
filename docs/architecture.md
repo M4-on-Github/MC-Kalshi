@@ -120,15 +120,18 @@ Implementation rules:
   for every buy and for sells of up to one `b`, and as log-sum-exp forms beyond that (`tradeCost`).
 - Budget inversion in the same spirit: `Δ = b·log1p(expm1(c/(100·b)) / p_side)`, floored to 6 dp
   (plus a nanocontract nudge so grid-exact answers are not lost), then re-quoted; the rounded cost
-  is at or under the budget by construction.
+  is at or under the budget up to floating-point noise, with a bounded fit loop (at most four
+  micro-contract steps) guarding the rare overshoot.
+- Trade cost and budget inversion are computed in the log domain (`ln p_yes` and `ln p_no` stay
+  finite for every finite `q`), so a side whose probability has underflowed to 0 still prices
+  finitely: a huge buy of it costs about nothing (one point after rounding) and a huge sell of the
+  certain side returns 100 points per contract.
 - In double precision `p_yes` reaches exactly 1 once `(q_y − q_n)/b` exceeds about 36.7 (ln 2⁵³) and
-  exactly 0 below about −745; quoting still works there, but a budget cannot be inverted on a side
-  whose price has saturated to 0 (`INVALID_STATE`).
+  exactly 0 below about −745; quoting and budget inversion still work there (log domain, above).
 - **Rounding always favors the pool**: a buy's cost rounds **up** to a whole point; a sell's
-  proceeds round **down**; payouts round **down**. Contracts are kept to 6 dp. Point values are
-  snapped to a micro-point (1e-6) before rounding so floating-point noise cannot move a whole-point
-  boundary; a trade whose exact cost is below a micro-point therefore costs 0, which the server's
-  minimum trade size (M3) makes unreachable.
+  proceeds round **down**; payouts round **down**. Contracts are kept to 6 dp. Point values
+  carry a relative tolerance of 1e-12 before rounding so floating-point noise cannot move a
+  whole-point boundary; a buy never costs less than one point.
 - One function produces both the quote shown in the ticket and the fill executed server-side:
   `{ contracts, costPoints, avgPrice, probBefore, probAfter, payoutIfWin }`. The server
   rejects a fill whose price moved beyond the user's slippage tolerance (default 2 points).
