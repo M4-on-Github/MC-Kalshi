@@ -8,7 +8,7 @@ Every later slice (order ticket, trade action, resolution, void, leaderboard) ne
 `packages/engine` exposes a small, pure API that turns a market's AMM state and a trade intent into a quote (contracts, cost, prices, payout, new state), inverts a points budget into contracts, computes settlement payouts and void refunds, and reports the pool's maximum liability. The six invariants in architecture §5 hold under property testing, and line coverage is at least 95 %.
 
 ## Assumptions (made without a reviewer; correct them and the spec changes first)
-1. Points are integers; contracts are numbers kept to 6 decimal places; probabilities are numbers in (0, 1); displayed prices are integers 1–99. Rounding always favors the pool: buy cost rounds up, sell proceeds round down, payouts round down.
+1. Points are integers; contracts are numbers kept to 6 decimal places; probabilities are numbers in (0, 1); displayed prices are integers 1–99. Rounding always favors the pool: buy cost rounds up and is never below 1 point; sell proceeds round down; payouts round down. Contracts keep six decimals, and `q` is snapped back to that grid after every trade. Point values carry a relative tolerance of 1e-12 before rounding, so floating-point noise cannot move a whole-point boundary; that is the only way a rounding rule can favor the user, and by at most 1e-12 of the amount.
 2. The engine never sees positions or balances except where a function takes one explicitly (`payout`, `voidRefund`). Whether a user may sell what they sell, and whether they can afford a buy, is the server's job in M3.
 3. "Sell YES" is `contracts < 0` on side YES (reduces `q_yes`); "buy NO" is `contracts > 0` on side NO (increases `q_no`). They are different state changes and both are first-class.
 4. One new dev dependency, `@vitest/coverage-v8`, is justified by the milestone's coverage exit criterion.
@@ -60,13 +60,21 @@ export interface PositionLike {
 export function probabilityYes(state: MarketState): number;
 export function costFunction(state: MarketState): number;              // C(q) in points, unrounded
 export function quoteContracts(state: MarketState, side: Side, contracts: number): Quote;
+export function tradeCost(state: MarketState, side: Side, delta: number): number; // exact unrounded cost of a signed trade, in points
 export function quotePoints(state: MarketState, side: Side, points: number): Quote; // buy with a budget
 export function maxPoolLoss(b: number): number;                          // integer points, 100·b·ln 2 rounded up
 export function payout(position: PositionLike, outcome: Outcome): number; // integer points, rounded down
 export function voidRefund(position: PositionLike): number;             // = costBasisPoints
-export class EngineError extends RangeError { readonly code: "INVALID_STATE" | "INVALID_CONTRACTS" | "INVALID_POINTS" }
+export type EngineErrorCode = "INVALID_STATE" | "INVALID_CONTRACTS" | "INVALID_POINTS";
+export class EngineError extends RangeError { readonly code: EngineErrorCode }
+export const B_MIN = 50;   // liquidity bounds, in contracts
+export const B_MAX = 500;
+export const CONTRACT_PAYOUT_POINTS = 100, PRICE_MIN = 1, PRICE_MAX = 99;
+export function clampProbability(p: number): number;
 ```
-Errors are thrown as `EngineError` with a `code` so the server can map them to user messages without parsing text.
+This is exactly what `src/index.ts` exports. `fitContractsToBudget` is exported from `lmsr.ts` for tests only and is not re-exported.
+
+Errors are thrown as `EngineError` with a `code` so the server can map them to user messages without parsing text. `quotePoints` inverts the budget in the log domain and returns a quote for any representable state, including one where a side's probability has underflowed to 0; it throws `INVALID_POINTS` only if the amount is not a positive integer number of points, buys less than one micro-contract, or cannot be fitted within four micro-contract steps.
 
 ## Acceptance criteria
 - [ ] Given any finite `MarketState` with `b` in 50..500, when `probabilityYes` runs, then `0 ≤ p ≤ 1`, `p + probabilityYes(swapped sides) = 1` within 1e-12, and strictly `0 < p < 1` while `|qYes − qNo|/b < 36` (invariant 1; beyond that gap `1 − p` is below one ulp of 1 in double precision).
@@ -76,6 +84,7 @@ Errors are thrown as `EngineError` with a `code` so the server can map them to u
 - [ ] Given a state and a budget `c ≥ 1` point, when `quotePoints` runs, then `costPoints ≤ c` and `c − costPoints < 1` whenever `c` buys at least one micro-contract, and the function terminates within three rounding adjustments (invariant 5).
 - [ ] Given any set of positions and the trades that produced them, when every trade is reversed in reverse order and `voidRefund` is paid, then each user's net points equal zero (invariant 6).
 - [ ] Given `b = 100`, `q = (0, 0)`, when 500 points buy YES, then `contracts` is within 0.01 of 9.76, `avgPrice` is 51, `probAfter` is within 0.001 of 0.524, and `payoutIfWin` is 976 (worked example, architecture §5).
+- [ ] Given a side whose probability has underflowed to exactly 0 (gap beyond ~745·b), when `tradeCost`, `quoteContracts` or `quotePoints` run, then every result is finite (`lmsr.underflow.test.ts`).
 - [ ] Given extreme but finite states (`|q| up to 10⁶`, `b = 50` or `500`), when any function runs, then no result is `NaN` or `±Infinity` (log-sum-exp).
 - [ ] Given `npx vitest run --coverage` in `packages/engine`, then lines and branches are both at least 95 % and the run fails below that.
 - [ ] Given `npm run typecheck && npm run lint && npm test` at the root, then all exit 0; CI green on the branch.
@@ -94,12 +103,17 @@ npm run typecheck && npm run lint && npm test  local gate
 ```
 packages/engine/src/
   index.ts          public exports and types only
-  lmsr.ts           costFunction, probabilityYes, quoteContracts, quotePoints, maxPoolLoss
-  rounding.ts       ceilPoints, floorPoints, roundContracts (6 dp)
-  settlement.ts     payout, voidRefund
-  errors.ts         EngineError
-  *.test.ts         next to each module; properties in lmsr.properties.test.ts
+  lmsr.ts           costFunction, probabilityYes, tradeCost, quoteContracts, quotePoints (+ fitContractsToBudget, tests only)
+  rounding.ts       ceilPoints, floorPoints, roundContracts, floorContracts (6 dp)
+  settlement.ts     maxPoolLoss, payout, voidRefund
+  errors.ts         EngineError, EngineErrorCode, B_MIN, B_MAX, assert* helpers
+  constants.ts      CONTRACT_PAYOUT_POINTS, PRICE_MIN, PRICE_MAX
+  types.ts          Side, Outcome, MarketState, Quote, PositionLike
+  errors.test.ts  rounding.test.ts  lmsr.test.ts  quote.test.ts  budget.test.ts
+  lmsr.properties.test.ts  liability.properties.test.ts  lmsr.edges.test.ts
+  lmsr.underflow.test.ts  settlement.test.ts  index.test.ts
 packages/engine/vitest.config.ts   coverage provider v8, thresholds 95/95
+packages/engine/vitest.setup.ts    caps each fast-check property at 30 s; the interrupt counts as a failure
 ```
 
 ## Code style
@@ -134,9 +148,13 @@ None. The quote's fields are what the M3 order ticket displays (see `docs/resear
 - Never: compute a price outside the engine; let a rounding rule favor the user; read the clock or randomness.
 
 ## Risks / open questions
-- Budget inversion with pool-favoring rounding can overshoot the budget by the final rounding step; the spec allows up to three micro-contract reductions. If a property run finds a case needing more, the approach changes to a bounded bisection on cost.
+- Budget inversion: flooring to six decimals plus a nanocontract nudge keeps the cost at or under the budget up to floating-point noise; a bounded loop (four micro-contract steps) handles the rare overshoot, demonstrated directly in `lmsr.edges.test.ts`; the property suite asserts `costPoints ≤ points`.
 - Liability tracking for invariant 4 needs a precise definition: liability = worst-case payout across outcomes minus points collected. The plan step fixes the formula in the test before code is written.
 - Floating-point: `Math.exp` near `|q|/b ≈ 700` overflows without log-sum-exp; the extreme-state criterion exists to catch regressions.
+
+Trade-offs recorded:
+- CI runs the engine suite twice (`npm test`, then the coverage run), roughly ten seconds extra per push; accepted so the root `npm test` stays the single local gate.
+- A buy whose exact cost is below one point costs one point.
 
 ## Tasks (from /agent-skills:plan)
 Dependency graph: errors and rounding → probability and cost → quote by contracts → quote by points → settlement and liability → public surface and coverage gate → adversarial pass and docs. Every task lands its failing test first (TDD is mandatory here); the local gate is `npm run typecheck && npm run lint && npm test`.
