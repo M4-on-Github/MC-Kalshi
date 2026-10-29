@@ -1,5 +1,5 @@
 import { roundContracts } from "./rounding";
-import type { MarketState, Outcome, Side } from "./types";
+import type { MarketState, Outcome, PositionLike, Side } from "./types";
 
 export type EngineErrorCode =
   | "INVALID_STATE"
@@ -32,7 +32,7 @@ export const MAX_POINTS = 1e12;
 
 export function assertLiquidity(b: number): void {
   if (!Number.isFinite(b) || b < B_MIN || b > B_MAX) {
-    throw new EngineError("INVALID_STATE", `b must be within ${B_MIN}..${B_MAX}, got ${b}`);
+    throw new EngineError("INVALID_STATE", `b must be within ${B_MIN}..${B_MAX}, got ${String(b)}`);
   }
 }
 
@@ -47,7 +47,7 @@ function isGridContracts(q: unknown): q is number {
 
 export function assertState(state: MarketState): void {
   if (typeof state !== "object" || state === null) {
-    throw new EngineError("INVALID_STATE", `state must be an object, got ${state}`);
+    throw new EngineError("INVALID_STATE", `state must be an object, got ${String(state)}`);
   }
   const { qYes, qNo, b } = state as { qYes: unknown; qNo: unknown; b: unknown };
   if (!isGridContracts(qYes) || !isGridContracts(qNo)) {
@@ -66,7 +66,7 @@ export function assertFiniteContracts(contracts: number): void {
   if (!Number.isFinite(contracts) || Math.abs(contracts) > MAX_CONTRACTS) {
     throw new EngineError(
       "INVALID_CONTRACTS",
-      `contracts must be finite and within ±${MAX_CONTRACTS}, got ${contracts}`,
+      `contracts must be finite and within ±${MAX_CONTRACTS}, got ${String(contracts)}`,
     );
   }
 }
@@ -82,7 +82,7 @@ export function assertPoints(points: number): void {
   if (!Number.isInteger(points) || points < 1 || points > MAX_POINTS) {
     throw new EngineError(
       "INVALID_POINTS",
-      `points must be an integer in 1..${MAX_POINTS}, got ${points}`,
+      `points must be an integer in 1..${MAX_POINTS}, got ${String(points)}`,
     );
   }
 }
@@ -99,4 +99,35 @@ export function assertSide(value: unknown): asserts value is Side {
 
 export function assertOutcome(value: unknown): asserts value is Outcome {
   assertYesNo(value, "outcome");
+}
+
+/**
+ * A settlement input: an object with holdings in 0..MAX_CONTRACTS on each side and an integer
+ * cost basis within ±MAX_POINTS. Hostile values raise EngineError, never a TypeError.
+ */
+export function assertPosition(position: PositionLike): void {
+  if (typeof position !== "object" || position === null) {
+    throw new EngineError("INVALID_STATE", `position must be an object, got ${String(position)}`);
+  }
+  const { contractsYes, contractsNo, costBasisPoints } = position as {
+    contractsYes: unknown;
+    contractsNo: unknown;
+    costBasisPoints: unknown;
+  };
+  if (!isHolding(contractsYes) || !isHolding(contractsNo)) {
+    throw new EngineError(
+      "INVALID_CONTRACTS",
+      `holdings must be finite and within 0..${MAX_CONTRACTS}, got (${String(contractsYes)}, ${String(contractsNo)})`,
+    );
+  }
+  if (!Number.isInteger(costBasisPoints) || Math.abs(costBasisPoints as number) > MAX_POINTS) {
+    throw new EngineError(
+      "INVALID_POINTS",
+      `cost basis must be an integer number of points within ±${MAX_POINTS}, got ${String(costBasisPoints)}`,
+    );
+  }
+}
+
+function isHolding(x: unknown): x is number {
+  return typeof x === "number" && Number.isFinite(x) && x >= 0 && x <= MAX_CONTRACTS;
 }

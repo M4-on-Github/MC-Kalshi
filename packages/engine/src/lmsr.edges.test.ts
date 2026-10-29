@@ -45,10 +45,24 @@ describe("fitContractsToBudget (the rounding guard behind quotePoints)", () => {
     expect(quote.costPoints).toBe(500);
   });
 
-  it("gives up with INVALID_POINTS when the budget cannot be met within a few steps", () => {
-    expect(codeOf(() => fitContractsToBudget(fresh100, "YES", base + 0.001, 500))).toBe(
-      "INVALID_POINTS",
-    );
+  it("bisects down to the largest amount that fits when the estimate overshoots by far", () => {
+    expect(fitContractsToBudget(fresh100, "YES", base + 0.001, 500).contracts).toBe(base);
+    expect(fitContractsToBudget(fresh100, "YES", base + 1000, 500).contracts).toBe(base);
+  });
+
+  it("probes forward when the estimate lands a few micro-contracts short", () => {
+    expect(
+      fitContractsToBudget(fresh100, "YES", roundContracts(base - 0.000003), 500).contracts,
+    ).toBe(base);
+  });
+
+  it("rejects a budget below the one-point minimum charge once bisection finds nothing", () => {
+    expect(codeOf(() => fitContractsToBudget(fresh100, "YES", 1, 0))).toBe("INVALID_POINTS");
+  });
+
+  it("rejects a side whose q already sits at MAX_CONTRACTS", () => {
+    const full: MarketState = { qYes: 1e9, qNo: 0, b: 100 };
+    expect(codeOf(() => fitContractsToBudget(full, "YES", 1, 1000))).toBe("INVALID_POINTS");
   });
 
   it("rejects an amount that floors to nothing", () => {

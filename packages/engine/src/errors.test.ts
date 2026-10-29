@@ -4,6 +4,7 @@ import {
   assertFiniteContracts,
   assertOutcome,
   assertPoints,
+  assertPosition,
   assertSide,
   assertState,
   B_MAX,
@@ -123,4 +124,59 @@ describe("assertSide and assertOutcome", () => {
       expect(codeOf(() => assertOutcome(value))).toBe("INVALID_SIDE");
     },
   );
+});
+
+describe("messages never throw a TypeError on hostile values", () => {
+  it("every assertion reports a Symbol as an EngineError", () => {
+    const sym = Symbol("x") as never;
+    expect(codeOf(() => assertState(sym))).toBe("INVALID_STATE");
+    expect(codeOf(() => assertState({ qYes: 0, qNo: 0, b: sym }))).toBe("INVALID_STATE");
+    expect(codeOf(() => assertContracts(sym))).toBe("INVALID_CONTRACTS");
+    expect(codeOf(() => assertFiniteContracts(sym))).toBe("INVALID_CONTRACTS");
+    expect(codeOf(() => assertPoints(sym))).toBe("INVALID_POINTS");
+    expect(codeOf(() => assertSide(sym))).toBe("INVALID_SIDE");
+    expect(codeOf(() => assertPosition(sym))).toBe("INVALID_STATE");
+  });
+});
+
+describe("assertPosition", () => {
+  it("accepts holdings in 0..MAX_CONTRACTS and an integer cost basis within ±MAX_POINTS", () => {
+    expect(() =>
+      assertPosition({ contractsYes: 0, contractsNo: MAX_CONTRACTS, costBasisPoints: -MAX_POINTS }),
+    ).not.toThrow();
+    expect(() =>
+      assertPosition({ contractsYes: 1.5, contractsNo: 0, costBasisPoints: MAX_POINTS }),
+    ).not.toThrow();
+  });
+
+  it.each([
+    ["null", null, "INVALID_STATE"],
+    ["undefined", undefined, "INVALID_STATE"],
+    ["a string", "position", "INVALID_STATE"],
+    ["negative YES", { contractsYes: -1, contractsNo: 0, costBasisPoints: 0 }, "INVALID_CONTRACTS"],
+    [
+      "NaN NO",
+      { contractsYes: 0, contractsNo: Number.NaN, costBasisPoints: 0 },
+      "INVALID_CONTRACTS",
+    ],
+    ["string YES", { contractsYes: "1", contractsNo: 0, costBasisPoints: 0 }, "INVALID_CONTRACTS"],
+    [
+      "YES beyond MAX_CONTRACTS",
+      { contractsYes: MAX_CONTRACTS + 1, contractsNo: 0, costBasisPoints: 0 },
+      "INVALID_CONTRACTS",
+    ],
+    ["missing basis", { contractsYes: 0, contractsNo: 0 }, "INVALID_POINTS"],
+    [
+      "fractional basis",
+      { contractsYes: 0, contractsNo: 0, costBasisPoints: 1.5 },
+      "INVALID_POINTS",
+    ],
+    [
+      "basis beyond MAX_POINTS",
+      { contractsYes: 0, contractsNo: 0, costBasisPoints: -MAX_POINTS - 1 },
+      "INVALID_POINTS",
+    ],
+  ])("rejects %s", (_label, position, code) => {
+    expect(codeOf(() => assertPosition(position as never))).toBe(code);
+  });
 });

@@ -8,7 +8,8 @@ import {
   EngineError,
   MAX_CONTRACTS,
 } from "./errors";
-import { ceilPoints, floorContracts, floorPoints, roundContracts } from "./rounding";
+import { ceilPoints, floorPoints, roundContracts } from "./rounding";
+import { payoutPoints } from "./settlement";
 import type { MarketState, Quote, Side } from "./types";
 
 /**
@@ -79,17 +80,15 @@ export function costFunction(state: MarketState): number {
 
 /**
  * (C(q + Δ·e_side) − C(q)) / (100·b) = ln(p_other + p_side · e^{d}) with d = Δ / b.
- * Three branches keep full precision: log1p/expm1 for every buy and for sells of up to one b
- * (the argument stays above −0.64, so nothing cancels), and log-sum-exp forms beyond that.
+ * Two branches keep full precision: log1p/expm1 for |d| ≤ 1 (the argument stays above −0.64, so
+ * nothing cancels), and beyond that ln(p_other + p_side·e^d) as a log-sum-exp of two finite
+ * logs, which adds two positive terms (no cancellation) and cannot overflow.
  */
 function tradeValue(lp: LogProbs, side: Side, d: number): number {
   const logPSide = side === "YES" ? lp.logPYes : lp.logPNo;
   const logPOther = side === "YES" ? lp.logPNo : lp.logPYes;
-  if (d >= -1 && d <= 700) {
+  if (d >= -1 && d <= 1) {
     return Math.log1p(Math.exp(logPSide) * Math.expm1(d));
-  }
-  if (d > 700) {
-    return d + logAddExp(logPOther - d, logPSide);
   }
   return logAddExp(logPOther, logPSide + d);
 }
@@ -127,7 +126,7 @@ export function quoteContracts(state: MarketState, side: Side, contracts: number
   if (delta === 0) {
     throw new EngineError(
       "INVALID_CONTRACTS",
-      `contracts round to zero at six decimals: ${contracts}`,
+      `contracts round to zero at six decimals: ${String(contracts)}`,
     );
   }
   const stateAfter = applyContracts(state, side, delta);
@@ -155,7 +154,7 @@ export function quoteContracts(state: MarketState, side: Side, contracts: number
     avgPrice,
     probBefore: probabilityYes(state),
     probAfter: probabilityYes(stateAfter),
-    payoutIfWin: delta > 0 ? floorPoints(delta * CONTRACT_PAYOUT_POINTS) : 0,
+    payoutIfWin: delta > 0 ? payoutPoints(delta) : 0,
     stateAfter,
   };
 }
@@ -164,8 +163,9 @@ export function quoteContracts(state: MarketState, side: Side, contracts: number
  * Buy with a points budget: the largest six-decimal amount of contracts whose rounded cost does
  * not exceed `points`. The closed form from architecture §5 in the log domain:
  *   Δ / b = ln(1 + expm1(c / (100·b)) / p_side) = softplus( ln expm1(c/(100·b)) − ln p_side )
- * which stays finite for any budget and any representable state; a budget that would buy more
- * than MAX_CONTRACTS is rejected.
+ * which stays finite for any budget and any representable state. When the floored amount would
+ * trade more than MAX_CONTRACTS, or push the side's q beyond it, the fill is capped there and
+ * accepted only if it still spends the whole budget (invariant 5); otherwise it is rejected.
  */
 export function quotePoints(state: MarketState, side: Side, points: number): Quote {
   assertSide(side);
@@ -176,21 +176,33 @@ export function quotePoints(state: MarketState, side: Side, points: number): Quo
   const x = points / (CONTRACT_PAYOUT_POINTS * state.b);
   const logExpm1 = x > 700 ? x : Math.log(Math.expm1(x));
   const exact = state.b * softplus(logExpm1 - logPSide);
-  if (exact > MAX_CONTRACTS) {
+  const quote = fitContractsToBudget(state, side, exact, points);
+  if (Math.floor(exact * MICRO) > roomMicros(state, side) && quote.costPoints < points) {
     throw new EngineError(
       "INVALID_POINTS",
-      `${points} points would buy more than ${MAX_CONTRACTS} contracts`,
+      `${points} points would buy more than this market can absorb (q on ${side} stays within ${MAX_CONTRACTS} contracts)`,
     );
   }
-  return fitContractsToBudget(state, side, exact, points);
+  return quote;
+}
+
+const MICRO = 1e6;
+const MAX_MICROS = MAX_CONTRACTS * MICRO;
+const MAX_BISECTION_STEPS = 64;
+const MAX_FORWARD_PROBES = 4;
+
+/** Micro-contracts one buy on `side` may add: |Δ| ≤ MAX_CONTRACTS and q after ≤ MAX_CONTRACTS. */
+function roomMicros(state: MarketState, side: Side): number {
+  const qMicros = Math.round((side === "YES" ? state.qYes : state.qNo) * MICRO);
+  return Math.min(MAX_MICROS, MAX_MICROS - qMicros);
 }
 
 /**
- * Floor `exactDelta` to six decimals and make sure its rounded cost fits `points`. Flooring keeps
- * the cost at or under the budget up to floating-point noise, and the nanocontract nudge keeps
- * grid-exact answers (e.g. 16031.58 − 1e-12) from flooring one micro-contract short; when the
- * nudge or noise overshoots by a point, the bounded loop steps back a micro-contract at a time.
- * Exported for tests; not part of the package's public surface.
+ * The largest six-decimal amount, at most `exactDelta` floored (plus a few forward probes), whose
+ * rounded cost fits `points`. Works on integer micro-contracts so the search is exact: if the
+ * floored amount overshoots by noise, bisect down (at most 64 quotes); if it fits, probe forward
+ * up to four micro-contracts so grid-exact answers that float a hair low are not left one short.
+ * Never exceeds the room left under MAX_CONTRACTS. Exported for tests; not public surface.
  */
 export function fitContractsToBudget(
   state: MarketState,
@@ -198,16 +210,46 @@ export function fitContractsToBudget(
   exactDelta: number,
   points: number,
 ): Quote {
-  let delta = floorContracts(exactDelta + 1e-9);
-  for (let attempt = 0; attempt < 4; attempt++) {
-    if (delta <= 0) {
-      throw new EngineError("INVALID_POINTS", `${points} points buy less than one micro-contract`);
-    }
-    const quote = quoteContracts(state, side, delta);
-    if (quote.costPoints <= points) {
-      return quote;
-    }
-    delta = roundContracts(delta - 0.000001);
+  const room = roomMicros(state, side);
+  if (room <= 0) {
+    throw new EngineError("INVALID_POINTS", "this market cannot absorb that budget");
   }
-  throw new EngineError("INVALID_POINTS", `budget inversion did not converge for ${points} points`);
+  const quoteAt = (micros: number): Quote | undefined => {
+    const quote = quoteContracts(state, side, micros / MICRO);
+    return quote.costPoints <= points ? quote : undefined;
+  };
+  const top = Math.min(room, Math.floor(exactDelta * MICRO));
+  if (top <= 0) {
+    throw new EngineError("INVALID_POINTS", `${points} points buy less than one micro-contract`);
+  }
+  let best = quoteAt(top);
+  let bestMicros = top;
+  if (best) {
+    for (let probe = 0; probe < MAX_FORWARD_PROBES && bestMicros < room; probe++) {
+      const next = quoteAt(bestMicros + 1);
+      if (!next) {
+        break;
+      }
+      best = next;
+      bestMicros += 1;
+    }
+    return best;
+  }
+  // Invariant: lo fits (0 trivially), hi does not.
+  let lo = 0;
+  let hi = top;
+  for (let step = 0; step < MAX_BISECTION_STEPS && hi - lo > 1; step++) {
+    const mid = Math.floor((lo + hi) / 2);
+    const quote = quoteAt(mid);
+    if (quote) {
+      lo = mid;
+      best = quote;
+    } else {
+      hi = mid;
+    }
+  }
+  if (!best) {
+    throw new EngineError("INVALID_POINTS", `${points} points buy less than one micro-contract`);
+  }
+  return best;
 }

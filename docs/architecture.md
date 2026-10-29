@@ -117,11 +117,12 @@ Implementation rules:
 - The cost of one trade is not `C(after) − C(before)` (that cancels catastrophically for micro-trades
   and for sells at prices within a few ulps of 1). It is `100·b·ln(p_other + p_side·e^{Δ/b})` with
   `p_other` taken from its own exponential, never as `1 − p`; implemented as `log1p(p_side·expm1(Δ/b))`
-  for every buy and for sells of up to one `b`, and as log-sum-exp forms beyond that (`tradeCost`).
-- Budget inversion in the same spirit: `Δ = b·log1p(expm1(c/(100·b)) / p_side)`, floored to 6 dp
-  (plus a nanocontract nudge so grid-exact answers are not lost), then re-quoted; the rounded cost
-  is at or under the budget up to floating-point noise, with a bounded fit loop (at most four
-  micro-contract steps) guarding the rare overshoot.
+  for `|Δ| ≤ b`, and beyond that as `logAddExp(ln p_other, ln p_side + Δ/b)`, which adds two positive
+  terms (no cancellation) and cannot overflow (`tradeCost`).
+- Budget inversion in the same spirit: `Δ = b·log1p(expm1(c/(100·b)) / p_side)`, floored to 6 dp and
+  capped at the room left under `MAX_CONTRACTS`, then fitted on integer micro-contracts: a bisection
+  (at most 64 quotes) when that amount overshoots the budget, up to four forward probes when it
+  fits, so the result is the largest grid amount whose rounded cost is within the budget.
 - Trade cost and budget inversion are computed in the log domain (`ln p_yes` and `ln p_no` stay
   finite for every finite `q`), so a side whose probability has underflowed to 0 still prices
   finitely: a huge buy of it costs about nothing (one point after rounding) and a huge sell of the
@@ -129,12 +130,21 @@ Implementation rules:
 - In double precision `p_yes` reaches exactly 1 once `(q_y − q_n)/b` exceeds about 36.7 (ln 2⁵³) and
   exactly 0 below about −745; quoting and budget inversion still work there (log domain, above).
 - **Rounding always favors the pool**: a buy's cost rounds **up** to a whole point; a sell's
-  proceeds round **down**; payouts round **down**. Contracts are kept to 6 dp. Point values
+  proceeds round **down**; payouts round **down** (computed in micro-contract integers,
+  `floor(round(contracts·1e6) / 1e4)`, so large amounts do not misround). Contracts are kept to 6 dp. Point values
   carry a tolerance of `min(1e-6, max(1e-12, 1e-12·|x|))` before rounding so floating-point noise cannot move a
   whole-point boundary; a buy never costs less than one point.
 - Bounds: `|q_y|`, `|q_n|` and a trade's `|Δ|` are at most 1e9 contracts (`MAX_CONTRACTS`), budgets and
   cost bases at most 1e12 points (`MAX_POINTS`), so every integer result stays a safe integer; `q`
-  must sit on the six-decimal grid. A budget that would buy more than 1e9 contracts is rejected.
+  must sit on the six-decimal grid. A budget that would buy more than 1e9 contracts, or push the side's `q`
+  beyond it, is rejected unless the capped fill still costs the whole budget.
+- Precision limits, accepted and recorded in the M1 spec: invariant 4 holds in exact arithmetic, and
+  noise of up to ~3e-5 points per trade could exceed it by a fraction of a point only on an
+  engineered path needing a ~1e11-point bankroll; above ~1.7e10 points the rounding tolerance is
+  below one ulp, so an exact-integer cost can be charged one extra point (favors the pool);
+  `Math.exp`/`log1p`/`expm1` differ across JavaScript engines, so browser quotes are indicative and
+  the server's fill is authoritative (§9); an underflowed side prices every trade up to ~700·b at
+  exactly 0, so strict monotonicity holds only inside the representable range.
 - One function produces both the quote shown in the ticket and the fill executed server-side:
   `{ contracts, costPoints, avgPrice, probBefore, probAfter, payoutIfWin }`. The server
   rejects a fill whose price moved beyond the user's slippage tolerance (default 2 points).
