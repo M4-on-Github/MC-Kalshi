@@ -91,7 +91,8 @@ apps/web/
   src/db/schema.ts             empty in M0; M2 adds tables
   drizzle/                     generated migrations (none in M0)
   drizzle.config.ts
-  next.config.ts, tsconfig.json, package.json, postcss.config.mjs
+  next.config.ts, tsconfig.json, package.json, vitest.config.mts, .env.example
+                               (Tailwind is wired through @tailwindcss/turbopack in next.config.ts)
 packages/engine/
   src/index.ts                 constants + clampProbability
   src/index.test.ts            unit + property tests
@@ -99,8 +100,8 @@ packages/engine/
 biome.json                     one config for the repo
 package.json                   workspaces + root scripts
 tsconfig.base.json             strict, ESNext modules, bundler resolution
-vitest.config.ts               projects: packages/engine, apps/web
-.nvmrc / .gitattributes / .env.example
+vitest.config.mts              projects: packages/engine, apps/web
+.nvmrc / .npmrc / .gitattributes
 ```
 
 ## Code style
@@ -113,7 +114,7 @@ export const CONTRACT_PAYOUT_POINTS = 100;
 export const PRICE_MIN = 1;
 export const PRICE_MAX = 99;
 
-/** Clamp a probability into the open interval the engine quotes in: [0.01, 0.99]. */
+/** Clamp a probability into the closed interval the engine quotes in: [0.01, 0.99]. */
 export function clampProbability(p: number): number {
   if (!Number.isFinite(p)) {
     throw new RangeError(`probability must be finite, got ${p}`);
@@ -182,7 +183,7 @@ Five-axis review of `main...feat/m0-scaffold` on 2026-10-29. Verdict: approve af
 
 Correctness: matches the spec; error and timeout paths tested; the health body is built from fixed fields so no driver text can leak. Readability: route handlers are thin; names match the spec. Architecture: engine has zero runtime deps; db access is server-only by convention (no client components exist yet; a `server-only` guard is an M2 ask-first dependency). Security: no secrets in code; `.env.example` matches `process.env` reads; Vercel Authentication protects previews. Performance: nothing unbounded.
 
-Bug-hunt pass (`/code-review medium`): _recorded below when it completes._
+Bug-hunt pass (`/code-review medium`), nine findings, all addressed in the follow-up commit: `connect_timeout` lowered to 5 s so a stuck connect cannot hold the single connection past the health budget; CI now also runs on `pull_request` to `main`; the DB client is cached on `globalThis` so `next dev` hot reloads do not leak pooled connections; `drizzle.config.ts` warns clearly when `DATABASE_URL` is unset; the spec index row was restored (an earlier `git checkout` of Markdown files had reverted it); root Vitest config renamed to `.mts` to silence Vite's CommonJS warning; `apps/web/vitest.config.mts` added with the `@` alias; spec structure text corrected (no `postcss.config.mjs`, `.env.example` lives in `apps/web`, closed interval); the route now asks `getDb()` instead of re-reading `DATABASE_URL`.
 
 ## Definition of Done
 
